@@ -1,0 +1,13 @@
+# Backup keep-awake pinger for Render Free (primary: cron-job.org every 10 min).
+# Set repository variable VESPER_HEALTH_URL = https://<service>.onrender.com/health
+name: keep-awake
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    if: ${{ vars.VESPER_HEALTH_URL != '' }}
+    steps:
+      - run: curl -fsS --max-time 90 --retry 2 "${{ vars.VESPER_HEALTH_URL }}" || true

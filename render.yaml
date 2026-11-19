@@ -1,0 +1,37 @@
+# Render Blueprint: New -> Blueprint -> pick this repo. Paste secrets in the dashboard (sync: false).
+services:
+  - type: web
+    name: vesper-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: singapore
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: MONGO_URI
+        sync: false
+      - key: MONGO_DB
+        value: vesper
+      - key: JWT_SECRET
+        generateValue: true
+      - key: HALL_DATA_KEYSET
+        sync: false
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD_ARGON2
+        sync: false
+      - key: MEDIA_PROVIDER
+        value: cloudinary
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: CLOUDINARY_FOLDER
+        value: vesper/m
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: FCM_SERVICE_ACCOUNT_JSON_B64
+        sync: false
