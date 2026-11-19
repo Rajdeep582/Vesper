@@ -87,13 +87,14 @@ class Hall(
             runCatching { media.requireAttachable(c, mediaId, f.kind, MediaScope.HALL, null) }.onFailure { return Nack(f.cmid, Nacks.MEDIA, it.message) }
         }
         val id = randomId()
-        val exp = now + Limits.ttlFor(f.kind)
+        val keep = f.keep && f.kind == MessageKind.TEXT
+        val exp = now + if (keep) com.rajdeep.vesper.shared.Keep.FOREVER_MS else Limits.ttlFor(f.kind)
         val seq = db.nextSeq("hallSeq")
         val enc = atRest.seal(VesperJson.encodeToString(MessageBody.serializer(), f.body), id)
         db.hall.insertOne(
             doc(
                 "_id" to id, "seq" to seq, "uid" to c.uid, "k" to f.kind.name, "enc" to enc, "mid" to mediaId, "cmid" to f.cmid,
-                "at" to now.asDate(), "exp" to exp.asDate(), "ttl" to if (mediaId == null) exp.asDate() else null,
+                "at" to now.asDate(), "exp" to exp.asDate(), "ttl" to if (mediaId == null && !keep) exp.asDate() else null,
             ),
         )
         if (mediaId != null) media.attach(mediaId, id, exp)
@@ -182,7 +183,7 @@ class Direct(
             runCatching { media.requireAttachable(c, it, f.kind, MediaScope.PRIVATE, f.toUserId) }.getOrElse { e -> return Nack(f.cmid, Nacks.MEDIA, e.message) }
         }
         val mid = randomId()
-        val exp = now + Limits.ttlFor(f.kind)
+        val exp = now + if (f.keep && f.kind == MessageKind.TEXT) com.rajdeep.vesper.shared.Keep.FOREVER_MS else Limits.ttlFor(f.kind)
         val pair = listOf(c.uid, f.toUserId).sorted().joinToString(":")
         try {
             db.privateMeta.insertOne(

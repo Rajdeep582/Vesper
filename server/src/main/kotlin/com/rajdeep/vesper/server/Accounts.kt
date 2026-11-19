@@ -173,7 +173,18 @@ class Accounts(
     }
 
     /** Signed-out password change: username + current password. Ends every session of the account. */
-    suspend fun resetPassword(username: String, current: String, next: String, ip: String) {
+    /** Checks username + password (rate-limited) and returns the user id. */
+    suspend fun verifyCredentials(username: String, password: String, ip: String): String {
+        val u = username.trim().lowercase()
+        val key = "$u|$ip"
+        if (!signInLimiter.allow(key)) tooMany()
+        val user = db.users.one(Document("u", u))
+        val ok = withContext(Dispatchers.Default) { Passwords.verify(password, user?.str("ph")) }
+        if (user == null || !ok) unauthorized("Wrong username or password")
+        return user.str("_id")!!
+    }
+
+    suspend fun resetPassword(username: String, current: String, next: String, ip: String): String {
         val u = username.trim().lowercase()
         val key = "$u|$ip"
         if (!signInLimiter.allow(key)) tooMany()
@@ -191,6 +202,7 @@ class Accounts(
         db.refresh.deleteMany(Document("uid", uid))
         hub.kickUser(uid, AccountEnded("password_changed"))
         activity.record("password_changed", uid, u)
+        return uid
     }
 
     suspend fun verifyPassword(c: Caller, password: String) {
@@ -201,6 +213,7 @@ class Accounts(
 
     /** Hard-deletes an account and everything tied to it. Used by self-delete and admin delete. */
     suspend fun deleteAccount(uid: String, reason: String): List<String> {
+        db.backups.deleteMany(Document("uid", uid))
         val user = db.users.one(Document("_id", uid)) ?: notFound()
         if (user.str("role") == "admin") forbidden("admin", "The admin identity can't be deleted")
         revokeAll(uid, reason)

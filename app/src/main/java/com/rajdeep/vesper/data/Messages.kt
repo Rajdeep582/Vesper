@@ -81,6 +81,7 @@ class Messages @Inject constructor(
     private val session: SessionManager,
     private val media: MediaRepository,
     private val notifier: Notifier,
+    private val backup: ChatBackup,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val dao get() = db.messages()
@@ -114,6 +115,8 @@ class Messages @Inject constructor(
     }
 
     private fun me() = session.current() ?: error("signed out")
+    private val foreverRx = Regex("""^\*(.+)\*forever$""", RegexOption.DOT_MATCHES_ALL)
+    private fun isForever(t: String?) = t != null && foreverRx.matches(t.trim())
     private fun newCmid() = UUID.randomUUID().toString()
 
     // ------------------------------------------------------------------ sending
@@ -121,7 +124,7 @@ class Messages @Inject constructor(
     suspend fun sendText(scope: String, peer: String?, text: String) {
         val t = text.trim()
         if (t.isEmpty()) return
-        t.chunked(Limits.MAX_TEXT_CHARS).forEach { part ->
+        (if (isForever(t)) listOf(t) else t.chunked(Limits.MAX_TEXT_CHARS)).forEach { part ->
             insertOutgoing(scope, peer, MessageKind.TEXT, part, null, null)
         }
         flush()
@@ -153,7 +156,9 @@ class Messages @Inject constructor(
 
     /** Remove messages from this phone only (others keep theirs until expiry). */
     suspend fun deleteLocal(ids: List<String>) {
-        ids.forEach { id -> dao.get(id)?.let { media.purgeStaged(it.stagedBlob) } }
+        val rows = ids.mapNotNull { dao.get(it) }
+        rows.forEach { media.purgeStaged(it.stagedBlob) }
+        backup.forget(rows.filter { it.scope == Scope.DIRECT }.mapNotNull { it.serverId })
         dao.delete(ids)
     }
 
@@ -190,12 +195,16 @@ class Messages @Inject constructor(
     }
 
     private suspend fun sendHall(m: MessageEntity, kind: MessageKind, body: MessageBody): Boolean {
-        val reply = rt.request(m.localId, HallSend(m.localId, kind, body)) ?: return false
+        val reply = rt.request(m.localId, HallSend(m.localId, kind, body, keep = isForever(m.text))) ?: return false
         return handleReply(m, reply)
     }
 
     private suspend fun handleReply(m: MessageEntity, reply: com.rajdeep.vesper.shared.Frame): Boolean = when (reply) {
-        is Ack -> { dao.markSent(m.localId, reply.id, reply.acceptedAt, reply.expiresAt, reply.seq); true }
+        is Ack -> {
+            dao.markSent(m.localId, reply.id, reply.acceptedAt, reply.expiresAt, reply.seq)
+            if (m.scope == Scope.DIRECT) dao.get(m.localId)?.let(backup::save)
+            true
+        }
         is Nack -> {
             if (reply.code == Nacks.RATE) false else {
                 dao.markFailed(m.localId, reply.message ?: "Couldn't send")
@@ -216,7 +225,7 @@ class Messages @Inject constructor(
             if (envelopes.none { it.toUserId == peer }) {
                 dao.markFailed(m.localId, "This person has no active devices"); return true
             }
-            val reply = rt.request(m.localId, DirectSend(m.localId, peer, kind, body.media?.mediaId, envelopes)) ?: return false
+            val reply = rt.request(m.localId, DirectSend(m.localId, peer, kind, body.media?.mediaId, envelopes, keep = isForever(m.text))) ?: return false
             if (reply is Nack && reply.code == Nacks.DEVICES) {
                 deviceCache.remove(peer); deviceCache.remove(s.userId)
                 // Device list changed: drop sessions for removed devices; missing ones get fresh bundles next round.
@@ -376,6 +385,7 @@ class Messages @Inject constructor(
                 read = outgoing || notifier.isViewing(peer),
             ),
         )
+        if (inserted != -1L) dao.get("d:${e.mid}")?.let(backup::save)
         if (inserted != -1L && !outgoing) {
             if (live) _events.tryEmit(ChatEvent.Incoming(Scope.DIRECT, peer))
             notifier.direct(peer, name, p.kind, p.body.text, e.mid, e.expiresAt)

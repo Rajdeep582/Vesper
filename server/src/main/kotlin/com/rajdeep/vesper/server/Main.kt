@@ -20,6 +20,10 @@ import com.rajdeep.vesper.shared.Nacks
 import com.rajdeep.vesper.shared.Ok
 import com.rajdeep.vesper.shared.PasswordChange
 import com.rajdeep.vesper.shared.PasswordReset
+import com.rajdeep.vesper.shared.BackupKey
+import com.rajdeep.vesper.shared.BackupItems
+import com.rajdeep.vesper.shared.BackupIds
+import com.rajdeep.vesper.shared.BackupKeyLookup
 import com.rajdeep.vesper.shared.PasswordConfirm
 import com.rajdeep.vesper.shared.Ping
 import com.rajdeep.vesper.shared.Pong
@@ -96,6 +100,7 @@ class Services(val cfg: Config, val db: Db) {
     val direct = Direct(db, hub, media, activity, accounts, names, push)
     val keepAlive = KeepAlive()
     val sweeper = Sweeper(db, media, hub)
+    val backups = Backups(db)
     val admin = Admin(db, hub, accounts, hall, media, activity, names, keepAlive, startedAt)
 }
 
@@ -165,9 +170,16 @@ private fun Route.authRoutes(s: Services) {
     post("/auth/signup") { call.respond(s.accounts.signUp(call.receive<AuthRequest>(), call.ip())) }
     post("/auth/signin") { call.respond(s.accounts.signIn(call.receive<AuthRequest>(), call.ip())) }
     post("/auth/refresh") { call.respond(s.accounts.refresh(call.receive<RefreshRequest>().refreshToken)) }
+    /** Signed-out password change needs the wrapped backup key to re-wrap it; verified by username + password. */
+    post("/auth/backup-key") {
+        val b = call.receive<BackupKeyLookup>()
+        val uid = s.accounts.verifyCredentials(b.username, b.password, call.ip())
+        call.respond(s.backups.key(uid) ?: BackupKey("", 0, ""))
+    }
     post("/auth/password") {
         val b = call.receive<PasswordReset>()
-        s.accounts.resetPassword(b.username, b.current, b.next, call.ip())
+        val uid = s.accounts.resetPassword(b.username, b.current, b.next, call.ip())
+        b.backupKey?.let { s.backups.setKey(uid, it) }
         call.respond(Ok())
     }
 }
@@ -191,6 +203,7 @@ private fun Route.memberRoutes(s: Services) {
     post("/me/password") {
         val b = call.receive<PasswordChange>()
         s.accounts.changePassword(call.caller(), b.current, b.next, b.username)
+        b.backupKey?.let { s.backups.setKey(call.caller().uid, it) }
         call.respond(Ok())
     }
     post("/me/delete") {
@@ -217,6 +230,11 @@ private fun Route.memberRoutes(s: Services) {
         call.respond(s.hall.page(after, limit))
     }
     get("/direct/pending") { call.respond(s.direct.pending(call.caller())) }
+    get("/backup/key") { call.respond(s.backups.key(call.caller().uid) ?: BackupKey("", 0, "")) }
+    put("/backup/key") { s.backups.setKey(call.caller().uid, call.receive<BackupKey>()); call.respond(Ok()) }
+    get("/backup/items") { call.respond(s.backups.list(call.caller().uid)) }
+    put("/backup/items") { s.backups.put(call.caller().uid, call.receive<BackupItems>().items); call.respond(Ok()) }
+    post("/backup/delete") { s.backups.delete(call.caller().uid, call.receive<BackupIds>().ids); call.respond(Ok()) }
     post("/direct/receipts") { call.respond(s.direct.receipts(call.caller(), call.receive<com.rajdeep.vesper.shared.ReceiptQuery>())) }
     post("/direct/ack") { s.direct.ack(call.caller(), DirectAck(call.receive<AckIds>().ids)); call.respond(Ok()) }
 

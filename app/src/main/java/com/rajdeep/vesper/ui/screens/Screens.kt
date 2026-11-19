@@ -427,30 +427,9 @@ fun YouScreen(vm: YouViewModel = hiltViewModel()) {
                 Hairline()
                 ToggleRow("Haptics", "Light touch feedback", prefs.haptics, vm::haptics)
             }
-            SectionLabel("Privacy")
-            Group {
-                InfoRow("Disappearing by design", "Text disappears 72 hours after the server accepts it; voice and photos after 24 hours — from the server and this phone.")
-            }
-            SectionLabel(if (me?.isAdmin == true) "Devices signed in as administrator" else "Devices")
-            Group {
-                if (me?.isAdmin == true) {
-                    InfoRow("Shared credentials", "Anyone who signs in with the admin credentials becomes another device of this identity and receives new private messages sent to it from then on.")
-                    Hairline()
-                }
-                devices.forEachIndexed { i, d ->
-                    if (i > 0) Hairline()
-                    ListRow(trailing = if (d.current) null else ({
-                        Text("Sign out", style = V.t.label, color = V.c.error, modifier = Modifier.clip(RoundedCornerShape(10.dp)).pressable { vm.signOutDevice(d.deviceId) }.padding(10.dp))
-                    })) { Column(Modifier.weight(1f)) {
-                        Text(d.label + if (d.current) "  · this phone" else "", style = V.t.subhead, color = V.c.text)
-                        Text("Last seen " + clock(d.lastSeenAt) + " · " + dayLabel(d.lastSeenAt), style = V.t.label, color = V.c.text2)
-                    } }
-                }
-                if (devices.count { !it.current } > 0) {
-                    Hairline()
-                    ListRow(onClick = { vm.signOutOthers() }) { Text("Sign out all other devices", style = V.t.body, color = V.c.error, modifier = Modifier.weight(1f)) }
-                }
-            }
+            SectionLabel("About")
+            com.rajdeep.vesper.ui.components.AboutContent()
+            Spacer(Modifier.height(8.dp))
             SectionLabel("Account")
             Group {
                 ListRow(onClick = { sheet = "password" }) { Text("Change password", style = V.t.body, color = V.c.text, modifier = Modifier.weight(1f)) }

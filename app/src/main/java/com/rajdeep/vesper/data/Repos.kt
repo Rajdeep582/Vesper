@@ -52,6 +52,7 @@ class AuthRepository @Inject constructor(
     private val notifier: Notifier,
     private val push: PushRegistrar,
     @dagger.hilt.android.qualifiers.ApplicationContext private val ctx: android.content.Context,
+    private val backup: ChatBackup,
 ) {
     /** App-scoped Android ID (stable across reinstall for this signing key), salted and hashed. */
     private fun hwid(): String = runCatching {
@@ -73,6 +74,8 @@ class AuthRepository @Inject constructor(
             gen.apply(messages.stores)
             db.users().upsert(listOf(UserEntity(res.user.id, res.user.username, res.user.joinedAt)))
         }
+        // Restore private chats from the encrypted backup before the UI shows them.
+        runCatching { backup.onAuthenticated(password) }
         lifecycle.onSignedIn()
         push.register()
     }
@@ -80,16 +83,18 @@ class AuthRepository @Inject constructor(
     suspend fun signOut() {
         runCatching { api.postEmpty("/v1/auth/signout", Ok.serializer()) }
         notifier.cancelAll()
+        backup.clear()
         session.end("signed_out")
     }
 
     suspend fun changePassword(username: String, current: String, next: String) {
-        api.post("/v1/me/password", PasswordChange(current, next, username), PasswordChange.serializer(), Ok.serializer())
+        api.post("/v1/me/password", PasswordChange(current, next, username, backup.rewrapLocal(next)), PasswordChange.serializer(), Ok.serializer())
     }
 
     /** Signed-out change: verified by username + current password; ends all sessions of that account. */
     suspend fun resetPassword(username: String, current: String, next: String) {
-        api.post("/v1/auth/password", PasswordReset(username, current, next), PasswordReset.serializer(), Ok.serializer(), auth = false)
+        val bk = backup.rewrapRemote(username, current, next)
+        api.post("/v1/auth/password", PasswordReset(username, current, next, bk), PasswordReset.serializer(), Ok.serializer(), auth = false)
     }
 
     suspend fun deleteAccount(password: String) {

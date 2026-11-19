@@ -19,6 +19,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.border
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -150,6 +151,7 @@ class ChatViewModel @Inject constructor(
     val events = messages.events
     val isAdmin get() = session.current()?.isAdmin == true
     val myId get() = session.current()?.userId
+    val myName get() = session.current()?.username ?: "someone"
     val peerUser = peer?.let { people.observe(it).stateIn(viewModelScope, SharingStarted.Eagerly, null) }
     val error = MutableStateFlow<String?>(null)
     fun now() = session.now()
@@ -215,6 +217,8 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
     val listState = rememberLazyListState()
     val now = rememberNow { vm.now() }
     var menuFor by remember { mutableStateOf<MessageEntity?>(null) }
+    var infoSheet by remember { mutableStateOf<String?>(null) }
+    var confirmClear by remember { mutableStateOf(false) }
     val selected = remember { androidx.compose.runtime.mutableStateListOf<String>() }
     val selecting = selected.isNotEmpty()
     fun toggle(m: MessageEntity) { if (m.state == MsgState.SYSTEM) return; fb.tick(); if (m.localId in selected) selected.remove(m.localId) else selected.add(m.localId) }
@@ -338,7 +342,20 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
                     disabledReason = if (mutedNow) "You're muted in the Hall" + (muted?.takeIf { it < Long.MAX_VALUE / 2 }?.let { " until " + clock(it) } ?: "") else null,
                     placeholder = if (vm.scope == Scope.HALL) "Message the Hall" else "Private message",
                     level = level, elapsedMs = elapsed,
-                    onSend = { vm.sendText(it) },
+                    onSend = { raw ->
+                        val t = raw.trim()
+                        val cmd = t.substringBefore(' ').lowercase()
+                        val arg = t.substringAfter(' ', "").trim()
+                        when (cmd) {
+                            "/docs" -> infoSheet = "docs"
+                            "/about" -> infoSheet = "about"
+                            "/clear" -> confirmClear = true
+                            "/keep" -> if (arg.isNotEmpty()) vm.sendText("*$arg*forever")
+                            "/me" -> if (arg.isNotEmpty()) vm.sendText("_${vm.myName} ${arg}_")
+                            "/shrug" -> vm.sendText((if (arg.isNotEmpty()) "$arg " else "") + "¯\\_(ツ)_/¯")
+                            else -> vm.sendText(raw)
+                        }
+                    },
                     onAttach = { attachOpen = true },
                     onRecordStart = {
                         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -374,6 +391,23 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
                 val f = File(dir, UUID.randomUUID().toString() + ".jpg")
                 captureFile = f
                 takePhoto.launch(FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f))
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+
+    infoSheet?.let { which ->
+        ModalBottomSheet(onDismissRequest = { infoSheet = null }, containerColor = V.c.bg, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+            Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(bottom = 32.dp)) {
+                if (which == "docs") com.rajdeep.vesper.ui.components.DocsContent() else com.rajdeep.vesper.ui.components.AboutContent()
+            }
+        }
+    }
+    if (confirmClear) {
+        ModalBottomSheet(onDismissRequest = { confirmClear = false }, containerColor = V.c.s1) {
+            SheetTitle("Clear this conversation?", "Removes every message here from this phone. Others keep theirs until they expire.")
+            SheetAction("Clear from this phone", danger = true) {
+                vm.deleteLocal(items.map { it.localId }); confirmClear = false; vm.error.value = "Conversation cleared"
             }
             Spacer(Modifier.height(24.dp))
         }

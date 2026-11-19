@@ -19,6 +19,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.material.icons.rounded.AllInclusive
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.ui.graphics.lerp
@@ -202,7 +203,9 @@ fun MessageBubble(
             ) {
                 when (kind) {
                     MessageKind.TEXT -> Column(Modifier.padding(start = 14.dp, end = 12.dp, top = 9.dp, bottom = 7.dp)) {
-                        Text(m.text ?: "", style = V.t.body, color = V.c.text)
+                        val q2 = V.c.text2; val s3 = V.c.s3
+                        val shown = remember(m.text, accent, q2) { com.rajdeep.vesper.ui.text.formatMessage(m.text ?: "", com.rajdeep.vesper.ui.theme.Mono, accent, q2, s3) }
+                        Text(shown, style = V.t.body, color = V.c.text)
                         Meta(m, fraction, Modifier.align(Alignment.End))
                     }
                     MessageKind.IMAGE -> Column {
@@ -228,6 +231,9 @@ fun MessageBubble(
 @Composable
 private fun Meta(m: MessageEntity, fraction: Float, modifier: Modifier = Modifier) {
     Row(modifier.padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        if (m.text != null && com.rajdeep.vesper.ui.text.MessageText.isForever(m.text)) {
+            Icon(androidx.compose.material.icons.Icons.Rounded.AllInclusive, "Kept forever", tint = V.accent, modifier = Modifier.size(14.dp))
+        }
         Text(clock(m.acceptedAt ?: m.createdAt), style = V.t.mono.copy(fontSize = V.t.caption.fontSize), color = V.c.text3)
         if (m.outgoing) {
             // WhatsApp rules: clock = sending, ✓ = sent (server has it), ✓✓ = delivered, blue ✓✓ = seen. Hall stops at ✓.
@@ -395,6 +401,31 @@ fun Composer(
         }
         return
     }
+    val cmdQuery = text.takeIf { it.startsWith("/") && !it.contains(' ') && !it.contains('\n') }
+    val matches = cmdQuery?.let { q -> com.rajdeep.vesper.ui.text.SLASH_COMMANDS.filter { it.name.startsWith(q, ignoreCase = true) } }.orEmpty()
+    Column(Modifier.fillMaxWidth()) {
+    com.rajdeep.vesper.ui.components.Reveal(
+        matches.isNotEmpty(),
+        enter = fadeIn(tween(Motion.S)) + androidx.compose.animation.expandVertically(Motion.spring()),
+        exit = fadeOut(tween(Motion.XS)) + androidx.compose.animation.shrinkVertically(tween(Motion.S)),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 6.dp).clip(RoundedCornerShape(20.dp))
+                .background(V.c.s2).border(1.dp, accent.copy(alpha = 0.25f), RoundedCornerShape(20.dp)).padding(vertical = 6.dp),
+        ) {
+            matches.forEach { c ->
+                Row(
+                    Modifier.fillMaxWidth().pressable(scaleTo = 0.98f) { fb.tick(); text = c.name + if (c.args.isNotEmpty()) " " else "" }.padding(horizontal = 16.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(c.name, style = V.t.mono.copy(fontSize = V.t.bodySmall.fontSize, fontWeight = FontWeight.Medium), color = accent)
+                    if (c.args.isNotEmpty()) Text("  " + c.args, style = V.t.mono.copy(fontSize = V.t.label.fontSize), color = V.c.text3)
+                    Spacer(Modifier.width(12.dp))
+                    Text(c.summary, style = V.t.label, color = V.c.text2, maxLines = 1, modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
     Box(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.Bottom) {
             AnimatedContent(rec == RecordUi.Idle, transitionSpec = { fadeIn(tween(Motion.S)) togetherWith fadeOut(tween(Motion.XS)) }, modifier = Modifier.weight(1f), label = "composer") { idle ->
@@ -496,6 +527,7 @@ fun Composer(
                 Icon(Icons.Rounded.Lock, "Slide up to lock", tint = if (p > 0.9f) accent else V.c.text2, modifier = Modifier.size(18.dp).offset(y = (-8 * p).dp))
             }
         }
+    }
     }
 }
 

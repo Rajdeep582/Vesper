@@ -94,8 +94,8 @@ data class AuthResponse(
 @Serializable data class RefreshRequest(val refreshToken: String)
 @Serializable data class TokenPair(val accessToken: String, val refreshToken: String, val accessExpiresAt: Long, val serverTime: Long)
 @Serializable data class Availability(val available: Boolean, val reason: String? = null)
-@Serializable data class PasswordChange(val current: String, val next: String, val username: String = "")
-@Serializable data class PasswordReset(val username: String, val current: String, val next: String)
+@Serializable data class PasswordChange(val current: String, val next: String, val username: String = "", val backupKey: BackupKey? = null)
+@Serializable data class PasswordReset(val username: String, val current: String, val next: String, val backupKey: BackupKey? = null)
 @Serializable data class PasswordConfirm(val password: String)
 @Serializable data class ApiError(val code: String, val message: String)
 @Serializable data class Ok(val ok: Boolean = true)
@@ -287,8 +287,8 @@ data class ConversationMeta(
 @JsonClassDiscriminator("t")
 sealed interface Frame
 
-@Serializable @SerialName("hall.send") data class HallSend(val cmid: String, val kind: MessageKind, val body: MessageBody) : Frame
-@Serializable @SerialName("direct.send") data class DirectSend(val cmid: String, val toUserId: String, val kind: MessageKind, val mediaId: String? = null, val envelopes: List<OutEnvelope>) : Frame
+@Serializable @SerialName("hall.send") data class HallSend(val cmid: String, val kind: MessageKind, val body: MessageBody, val keep: Boolean = false) : Frame
+@Serializable @SerialName("direct.send") data class DirectSend(val cmid: String, val toUserId: String, val kind: MessageKind, val mediaId: String? = null, val envelopes: List<OutEnvelope>, val keep: Boolean = false) : Frame
 @Serializable @SerialName("direct.ack") data class DirectAck(val ids: List<String>) : Frame
 /** Client → server: I have seen these messages (message ids) from [peerId]. Relayed to the sender as [DirectSeen]. */
 @Serializable @SerialName("direct.read") data class DirectRead(val peerId: String, val mids: List<String>) : Frame
@@ -319,3 +319,14 @@ object Nacks {
     const val RATE = "rate"
     const val UNKNOWN_USER = "unknown_user"
 }
+
+/** "forever" text messages: kept for ~100 years instead of the normal TTL. */
+object Keep { const val FOREVER_MS = 100L * 365 * 24 * 3_600_000 }
+
+// ---------------------------------------------------------------- encrypted chat backup (private chats)
+/** Backup key K wrapped with a key derived from the user's password (PBKDF2-SHA256). The server never sees K. */
+@Serializable data class BackupKey(val salt: String, val iterations: Int, val wrapped: String)
+@Serializable data class BackupItem(val id: String, val blob: String, val expiresAt: Long)
+@Serializable data class BackupItems(val items: List<BackupItem>)
+@Serializable data class BackupIds(val ids: List<String>)
+@Serializable data class BackupKeyLookup(val username: String, val password: String)

@@ -25,6 +25,8 @@ class Db(val client: MongoClient, val db: MongoDatabase) {
     val conversations: MongoCollection<Document> = db.getCollection("conversations")
     val media: MongoCollection<Document> = db.getCollection("media_objects")
     val activity: MongoCollection<Document> = db.getCollection("activity_events")
+    /** Opaque, client-encrypted copies of private messages (the server cannot read them). */
+    val backups: MongoCollection<Document> = db.getCollection("chat_backups")
     val counters: MongoCollection<Document> = db.getCollection("counters")
 
     suspend fun ensureIndexes() {
@@ -53,6 +55,8 @@ class Db(val client: MongoClient, val db: MongoDatabase) {
         safe("23") { media.createIndex(Indexes.ascending("st", "at")) }
         safe("24") { activity.createIndex(Indexes.descending("at")) }
         safe("25") { activity.createIndex(Indexes.ascending("exp"), IndexOptions().expireAfter(0, TimeUnit.SECONDS)) }
+        safe("27") { backups.createIndex(Indexes.ascending("uid", "at")) }
+        safe("28") { backups.createIndex(Indexes.ascending("exp"), IndexOptions().expireAfter(0, TimeUnit.SECONDS)) }
         safe("26") { devices.createIndex(Indexes.ascending("hw"), IndexOptions().sparse(true)) }
     }
 
