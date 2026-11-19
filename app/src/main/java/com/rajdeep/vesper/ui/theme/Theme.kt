@@ -96,6 +96,8 @@ data class TypeScale(
     val display: TextStyle = TextStyle(fontFamily = Fraunces, fontWeight = FontWeight.Medium, fontSize = 40.sp, lineHeight = 44.sp, letterSpacing = (-0.8).sp),
     val title: TextStyle = TextStyle(fontFamily = Fraunces, fontWeight = FontWeight.Medium, fontSize = 28.sp, lineHeight = 32.sp, letterSpacing = (-0.4).sp),
     val heading: TextStyle = TextStyle(fontFamily = Fraunces, fontWeight = FontWeight.Medium, fontSize = 20.sp, lineHeight = 26.sp, letterSpacing = (-0.2).sp),
+    /** Usernames on profile headers: UI sans so names read the same everywhere; Fraunces stays for screen titles. */
+    val name: TextStyle = TextStyle(fontFamily = Instrument, fontWeight = FontWeight.SemiBold, fontSize = 24.sp, lineHeight = 30.sp, letterSpacing = (-0.3).sp),
     val subhead: TextStyle = TextStyle(fontFamily = Instrument, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, lineHeight = 22.sp),
     val body: TextStyle = TextStyle(fontFamily = Instrument, fontWeight = FontWeight.Normal, fontSize = 16.sp, lineHeight = 23.sp),
     val bodySmall: TextStyle = TextStyle(fontFamily = Instrument, fontWeight = FontWeight.Normal, fontSize = 14.sp, lineHeight = 20.sp),

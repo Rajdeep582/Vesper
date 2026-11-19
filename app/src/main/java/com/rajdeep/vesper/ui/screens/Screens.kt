@@ -55,6 +55,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -258,7 +259,7 @@ fun ProfileScreen(onBack: () -> Unit, onMessage: (String) -> Unit, vm: ProfileVi
                 Monogram(u?.username ?: "", 112.dp, ring = V.c.hairline)
             }
             Spacer(Modifier.height(20.dp))
-            Text(u?.username ?: " ", style = V.t.title, color = V.c.text)
+            Text(u?.username ?: " ", style = V.t.name, color = V.c.text)
             Text(if (u != null) "Member since " + joined(u!!.joinedAt) else " ", style = V.t.bodySmall, color = V.c.text2, modifier = Modifier.padding(top = 4.dp))
             Spacer(Modifier.height(36.dp))
             if (!vm.isMe && u != null) {
@@ -292,7 +293,7 @@ fun ChatInfoScreen(onBack: () -> Unit, onProfile: (String) -> Unit, vm: ChatInfo
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
             Monogram(u?.username ?: "?", 84.dp)
             Spacer(Modifier.height(12.dp))
-            Text(u?.username ?: "…", style = V.t.heading, color = V.c.text)
+            Text(u?.username ?: "…", style = V.t.name.copy(fontSize = 20.sp), color = V.c.text)
             Spacer(Modifier.height(10.dp))
             GhostButton("View profile", onClick = { onProfile(vm.peer) })
         }
@@ -387,7 +388,7 @@ fun YouScreen(vm: YouViewModel = hiltViewModel()) {
             Column(Modifier.fillMaxWidth().padding(top = 36.dp, bottom = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Monogram(me?.username ?: "", 96.dp, ring = if (me?.isAdmin == true) V.c.console else V.c.hairline)
                 Spacer(Modifier.height(14.dp))
-                Text(me?.username ?: "", style = V.t.title, color = V.c.text)
+                Text(me?.username ?: "", style = V.t.name, color = V.c.text)
                 Text(
                     (if (me?.isAdmin == true) "Administrator · " else "") + "Member since " + joined(me?.joinedAt ?: 0),
                     style = V.t.label, color = if (me?.isAdmin == true) V.c.console else V.c.text2,

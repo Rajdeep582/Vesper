@@ -215,7 +215,7 @@ fun Monogram(name: String, size: Dp = 40.dp, modifier: Modifier = Modifier, ring
     ) {
         Text(
             name.firstOrNull()?.uppercase() ?: "·",
-            style = V.t.heading.copy(fontSize = (size.value * 0.42f).sp, lineHeight = (size.value * 0.5f).sp),
+            style = V.t.subhead.copy(fontSize = (size.value * 0.40f).sp, lineHeight = (size.value * 0.5f).sp),
             color = if (dark) Color(0xFFF1ECE4) else Color(0xFF231F19),
         )
     }

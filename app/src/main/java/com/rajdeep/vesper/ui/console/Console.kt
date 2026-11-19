@@ -507,7 +507,7 @@ fun MemberScreen(onBack: () -> Unit, vm: MemberViewModel = hiltViewModel()) {
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                 Box { Monogram(m.username, 88.dp); StatusDot(m.online, Modifier.align(Alignment.BottomEnd).size(16.dp)) }
                 Spacer(Modifier.height(12.dp))
-                Text(m.username, style = V.t.title, color = V.c.text)
+                Text(m.username, style = V.t.name, color = V.c.text)
                 Text(if (m.online) "Online now" else "Last active " + (m.lastActiveAt?.let { clockFull(it) } ?: "—"), style = V.t.label, color = if (m.online) V.c.success else V.c.text2)
             }
             SectionLabel("Details", Modifier.padding(top = 16.dp))
