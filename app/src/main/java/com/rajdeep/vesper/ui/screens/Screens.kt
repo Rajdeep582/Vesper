@@ -1,5 +1,6 @@
 package com.rajdeep.vesper.ui.screens
 
+import com.rajdeep.vesper.ui.components.springOverscroll
 import com.rajdeep.vesper.ui.components.Reveal
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -129,7 +130,7 @@ fun DirectListScreen(onOpen: (String) -> Unit, onFindPeople: () -> Unit, vm: Dir
                     action = { GhostButton("Find people", color = V.accent, onClick = onFindPeople) },
                 )
             }
-            else -> LazyColumn(Modifier.fillMaxSize()) {
+            else -> LazyColumn(Modifier.fillMaxSize().springOverscroll(), overscrollEffect = null) {
                 items(rows!!, key = { it.peerId }) { r ->
                     Box(Modifier.animateItem(placementSpec = Motion.offsetSpring).staggerIn(rows!!.indexOf(r), r.peerId)) { ConversationItem(r) { onOpen(r.peerId) } }
                 }
@@ -219,7 +220,7 @@ fun PeopleScreen(onProfile: (String) -> Unit, vm: PeopleViewModel = hiltViewMode
             err != null && res == null -> EmptyState("Can't reach Vesper", err!!)
             res == null -> SkeletonRows()
             res!!.isEmpty() -> EmptyState("No one by that name", "Usernames use a–z, 0–9, _ and .")
-            else -> LazyColumn(Modifier.fillMaxSize()) {
+            else -> LazyColumn(Modifier.fillMaxSize().springOverscroll(), overscrollEffect = null) {
                 itemsIndexed(res!!, key = { _, it -> it.id }) { i, u ->
                     Box(Modifier.animateItem().staggerIn(i, u.id)) {
                         ListRow(onClick = { onProfile(u.id) }, leading = { Monogram(u.username, 42.dp) }, trailing = { Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = V.c.text3) }) {

@@ -1,5 +1,6 @@
 package com.rajdeep.vesper.ui.console
 
+import com.rajdeep.vesper.ui.components.springOverscroll
 import com.rajdeep.vesper.ui.components.Reveal
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -332,7 +333,7 @@ private fun Activity(vm: ConsoleViewModel) {
         when {
             list == null -> SkeletonRows()
             list.isEmpty() -> EmptyState("Nothing yet", "Activity from the last 72 hours appears here live.")
-            else -> LazyColumn(Modifier.fillMaxSize().padding(top = 8.dp)) {
+            else -> LazyColumn(Modifier.fillMaxSize().padding(top = 8.dp).springOverscroll(), overscrollEffect = null) {
                 items(list, key = { it.id }) { e -> Box(Modifier.animateItem(fadeInSpec = Motion.tw(), placementSpec = Motion.offsetSpring)) { ActivityRow(e) } }
             }
         }
@@ -384,7 +385,7 @@ private fun Members(vm: ConsoleViewModel, onMember: (String) -> Unit) {
         }
         when {
             list == null -> SkeletonRows()
-            else -> LazyColumn(Modifier.fillMaxSize().padding(top = 6.dp)) {
+            else -> LazyColumn(Modifier.fillMaxSize().padding(top = 6.dp).springOverscroll(), overscrollEffect = null) {
                 items(list!!, key = { it.id }) { m ->
                     Box(Modifier.animateItem(placementSpec = Motion.offsetSpring)) {
                         ListRow(onClick = { onMember(m.id) }, leading = {
@@ -423,7 +424,7 @@ private fun HallModeration(vm: ConsoleViewModel) {
     when {
         list == null -> SkeletonRows()
         list!!.isEmpty() -> EmptyState("The Hall is empty", "Messages from the last 72 hours appear here for moderation.")
-        else -> LazyColumn(Modifier.fillMaxSize()) {
+        else -> LazyColumn(Modifier.fillMaxSize().springOverscroll(), overscrollEffect = null) {
             items(list!!, key = { it.id }) { m ->
                 Box(Modifier.animateItem(fadeOutSpec = Motion.tw(Motion.L), placementSpec = Motion.offsetSpring)) {
                     ListRow(onClick = { sel = m }, leading = { Monogram(m.senderName, 36.dp) }) {
@@ -462,7 +463,7 @@ private fun Conversations(vm: ConsoleViewModel) {
         when {
             list == null -> SkeletonRows()
             list!!.isEmpty() -> EmptyState("No private conversations", "Pairs appear here once members message each other.")
-            else -> LazyColumn(Modifier.fillMaxSize()) {
+            else -> LazyColumn(Modifier.fillMaxSize().springOverscroll(), overscrollEffect = null) {
                 items(list!!, key = { it.a + it.b }) { c ->
                     ListRow(leading = { PairAvatars(c.aName, c.bName) }) {
                         Column(Modifier.weight(1f)) {

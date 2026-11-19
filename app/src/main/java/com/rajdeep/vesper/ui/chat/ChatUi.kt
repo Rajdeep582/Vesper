@@ -19,6 +19,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
@@ -225,19 +229,24 @@ private fun Meta(m: MessageEntity, fraction: Float, modifier: Modifier = Modifie
     Row(modifier.padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         Text(clock(m.acceptedAt ?: m.createdAt), style = V.t.mono.copy(fontSize = V.t.caption.fontSize), color = V.c.text3)
         if (m.outgoing) {
+            // WhatsApp rules: clock = sending, ✓ = sent (server has it), ✓✓ = delivered, blue ✓✓ = seen. Hall stops at ✓.
             val (icon, tint) = when (m.state) {
                 MsgState.PENDING -> Icons.Rounded.Schedule to V.c.text3
                 MsgState.SENT -> Icons.Rounded.Done to V.c.text3
-                MsgState.DELIVERED -> Icons.Rounded.DoneAll to V.accent
+                MsgState.DELIVERED -> Icons.Rounded.DoneAll to V.c.text3
+                MsgState.READ -> Icons.Rounded.DoneAll to SeenBlue
                 else -> Icons.Rounded.ErrorOutline to V.c.error
             }
-            AnimatedContent(icon, transitionSpec = { (scaleIn(Motion.bouncy()) + fadeIn()) togetherWith fadeOut(tween(Motion.XS)) }, label = "state") { ic ->
-                Icon(ic, null, tint = tint, modifier = Modifier.size(13.dp))
+            val animTint by animateColorAsState(tint, tween(Motion.L), label = "tick")
+            AnimatedContent(icon, transitionSpec = { (scaleIn(Motion.bouncy(), initialScale = 0.4f) + fadeIn()) togetherWith fadeOut(tween(Motion.XS)) }, label = "state") { ic ->
+                Icon(ic, when (m.state) { MsgState.PENDING -> "Sending"; MsgState.SENT -> "Sent"; MsgState.DELIVERED -> "Delivered"; MsgState.READ -> "Seen"; else -> "Not sent" },
+                    tint = animTint, modifier = Modifier.size(15.dp))
             }
         }
-        if (m.expiresAt != null) ExpiryRing(fraction, V.c.text3)
     }
 }
+
+val SeenBlue = Color(0xFF53BDEB)
 
 @Composable
 private fun SystemLine(text: String) {
@@ -280,14 +289,15 @@ private fun VoiceContent(localId: String, ref: MediaRef, mine: Boolean) {
     val active = state.id == ref.mediaId
     val playing = active && state.playing
     val dur = ref.durationMs ?: 0L
-    val progress = if (active && dur > 0) (state.positionMs.toFloat() / (if (state.durationMs > 0) state.durationMs else dur)).coerceIn(0f, 1f) else 0f
+    val rawProgress = if (active && dur > 0) (state.positionMs.toFloat() / (if (state.durationMs > 0) state.durationMs else dur)).coerceIn(0f, 1f) else 0f
+    val progress by animateFloatAsState(rawProgress, if (playing) tween(260, easing = androidx.compose.animation.core.LinearEasing) else Motion.spring(), label = "progress")
     var loading by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val fb = V.fb
     val accent = V.accent
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
-            Modifier.size(40.dp).clip(CircleShape).background(accent)
+            Modifier.size(40.dp).clip(CircleShape).background(Brush.linearGradient(listOf(accent, lerp(accent, Color.Black, 0.25f))))
                 .pressable(enabled = ref.mediaId.isNotEmpty()) {
                     scope.launch {
                         loading = true
@@ -386,8 +396,15 @@ fun Composer(
         Row(verticalAlignment = Alignment.Bottom) {
             AnimatedContent(rec == RecordUi.Idle, transitionSpec = { fadeIn(tween(Motion.S)) togetherWith fadeOut(tween(Motion.XS)) }, modifier = Modifier.weight(1f), label = "composer") { idle ->
                 if (idle) {
+                    val focus = remember { MutableInteractionSource() }
+                    val focused by focus.collectIsFocusedAsState()
+                    val ring by animateColorAsState(if (focused) accent.copy(alpha = 0.55f) else V.c.hairline, tween(Motion.M), label = "ring")
                     Row(
-                        Modifier.fillMaxWidth().heightIn(min = 50.dp).clip(RoundedCornerShape(25.dp)).background(V.c.s2).padding(start = 4.dp, end = 14.dp),
+                        Modifier.fillMaxWidth().heightIn(min = 50.dp).clip(RoundedCornerShape(25.dp))
+                            .background(Brush.verticalGradient(listOf(V.c.s2, V.c.s1)))
+                            .border(1.dp, ring, RoundedCornerShape(25.dp))
+                            .animateContentSize(Motion.spring())
+                            .padding(start = 4.dp, end = 14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         IconAction(Icons.Rounded.Add, "Attach photo", tint = V.c.text2, size = 42.dp, onClick = onAttach)
@@ -396,6 +413,7 @@ fun Composer(
                             BasicTextField(
                                 text, { if (it.length <= Limits.MAX_TEXT_CHARS * 3) text = it },
                                 textStyle = V.t.body.copy(color = V.c.text), cursorBrush = SolidColor(accent), maxLines = 6,
+                                interactionSource = focus,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
@@ -407,11 +425,17 @@ fun Composer(
             Spacer(Modifier.width(8.dp))
             val hasText = text.isNotBlank()
             val locked = rec == RecordUi.Locked
+            val holding = rec is RecordUi.Holding
+            val grow by animateFloatAsState(if (holding) 1.28f else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.5f, stiffness = 420f), label = "grow")
+            val halo by animateFloatAsState(if (holding || locked) 1f + level.coerceIn(0f, 1f) * 0.9f else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.6f, stiffness = 300f), label = "halo")
+            Box(Modifier.size(50.dp), contentAlignment = Alignment.Center) {
+            // Voice halo: breathes with the mic level while recording.
+            Box(Modifier.size(50.dp).graphicsLayer { scaleX = halo * grow; scaleY = halo * grow; alpha = if (holding || locked) 0.22f else 0f }.clip(CircleShape).background(accent))
             Box(
                 Modifier.size(50.dp)
                     .offset { val r = rec; if (r is RecordUi.Holding) IntOffset(r.dragX.roundToInt().coerceAtMost(0), r.dragY.roundToInt().coerceAtMost(0)) else IntOffset.Zero }
-                    .scale(if (rec is RecordUi.Holding) 1.25f else 1f)
-                    .clip(CircleShape).background(accent)
+                    .graphicsLayer { scaleX = grow; scaleY = grow }
+                    .clip(CircleShape).background(Brush.linearGradient(listOf(accent, lerp(accent, Color.Black, 0.28f))))
                     .semantics { contentDescription = if (hasText || locked) "Send" else "Hold to record a voice message" }
                     .pointerInput(hasText, locked) {
                         if (hasText || locked) {
@@ -448,9 +472,14 @@ fun Composer(
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                AnimatedContent(if (hasText || locked) 1 else 0, transitionSpec = { (scaleIn(Motion.bouncy()) + fadeIn()) togetherWith (scaleOut(tween(Motion.XS)) + fadeOut()) }, label = "action") { s ->
-                    Icon(if (s == 1) Icons.AutoMirrored.Rounded.Send else Icons.Rounded.Mic, null, tint = V.c.onAccent, modifier = Modifier.size(22.dp))
+                AnimatedContent(if (hasText || locked) 1 else 0, transitionSpec = {
+                    (scaleIn(Motion.bouncy(), initialScale = 0.3f) + fadeIn() + androidx.compose.animation.slideInVertically(Motion.spring()) { it / 2 }) togetherWith
+                        (scaleOut(tween(Motion.XS), targetScale = 0.3f) + fadeOut(tween(Motion.XS)))
+                }, label = "action") { s ->
+                    val tilt by animateFloatAsState(if (s == 1) -18f else 0f, Motion.spring(), label = "tilt")
+                    Icon(if (s == 1) Icons.AutoMirrored.Rounded.Send else Icons.Rounded.Mic, null, tint = V.c.onAccent, modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = tilt })
                 }
+            }
             }
         }
         // Lock hint floats above the mic while holding.

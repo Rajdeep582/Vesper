@@ -8,6 +8,8 @@ import com.rajdeep.vesper.shared.Ack
 import com.rajdeep.vesper.shared.DeviceMismatch
 import com.rajdeep.vesper.shared.DirectAck
 import com.rajdeep.vesper.shared.DirectDelivered
+import com.rajdeep.vesper.shared.DirectRead
+import com.rajdeep.vesper.shared.DirectSeen
 import com.rajdeep.vesper.shared.DirectEnv
 import com.rajdeep.vesper.shared.DirectEnvelopeDto
 import com.rajdeep.vesper.shared.DirectSend
@@ -220,6 +222,16 @@ class Direct(
         val docs = db.envelopes.find(Filters.and(Filters.eq("toUid", c.uid), Filters.eq("toD", c.did), Filters.gt("exp", now.asDate())))
             .sort(Sorts.ascending("at")).limit(500).toList()
         return PendingEnvelopes(docs.map(::envToDto), now)
+    }
+
+    /** Read receipt: only for messages this user actually received from [r.peerId]; marks them seen and tells the sender. */
+    suspend fun read(c: Caller, r: DirectRead) {
+        if (r.mids.isEmpty()) return
+        val docs = db.privateMeta.find(Filters.and(Filters.`in`("_id", r.mids.take(500)), Filters.eq("fromUid", r.peerId), Filters.eq("toUid", c.uid))).toList()
+        if (docs.isEmpty()) return
+        val ids = docs.map { it.str("_id")!! }
+        db.privateMeta.updateMany(Filters.and(Filters.`in`("_id", ids), Filters.exists("seen", false)), Updates.set("seen", ServerClock.now().asDate()))
+        hub.toUser(r.peerId, DirectSeen(ids, c.uid))
     }
 
     suspend fun ack(c: Caller, a: DirectAck) {

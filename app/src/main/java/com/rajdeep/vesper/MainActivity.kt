@@ -33,6 +33,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -221,7 +223,13 @@ class MainActivity : ComponentActivity() {
         androidx.activity.compose.BackHandler(enabled = tab != Tab.HALL) { tab = Tab.HALL }
         LaunchedEffect(isAdmin) { if (tab == Tab.CONSOLE && !isAdmin) tab = Tab.HALL }
         Column(Modifier.fillMaxSize().background(V.c.bg)) {
-            Box(Modifier.weight(1f)) {
+            // The bar never hides: the keyboard simply covers it. Content consumes the bar + nav-bar height, so the chat
+            // composer's imePadding lifts it exactly to the keyboard top in one smooth motion (no up-then-down jump).
+            Box(
+                Modifier.weight(1f)
+                    .consumeWindowInsets(WindowInsets.navigationBars)
+                    .consumeWindowInsets(androidx.compose.foundation.layout.PaddingValues(bottom = 80.dp)),
+            ) {
                 AnimatedContent(tab, transitionSpec = {
                     val dir = if (targetState.ordinal > initialState.ordinal) 1 else -1
                     (fadeIn(Motion.tw(Motion.M)) + slideInHorizontally(Motion.tw()) { it / 14 * dir }) togetherWith (fadeOut(Motion.tw(Motion.S)) + slideOutHorizontally(Motion.tw()) { -it / 14 * dir })
@@ -238,7 +246,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            Reveal(!imeVisible || tab != Tab.HALL) { BottomBar(tabs, tab, unread) { tab = it } }
+            BottomBar(tabs, tab, unread) { tab = it }
         }
     }
 

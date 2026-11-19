@@ -1,5 +1,6 @@
 package com.rajdeep.vesper.ui.chat
 
+import com.rajdeep.vesper.ui.components.springOverscroll
 import com.rajdeep.vesper.ui.components.Reveal
 import android.Manifest
 import android.content.ClipData
@@ -252,6 +253,7 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { pendingRecord = false }
 
     Box(Modifier.fillMaxSize().background(V.c.bg)) {
+        com.rajdeep.vesper.ui.components.ChatBackdrop()
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             androidx.compose.animation.AnimatedContent(
                 selecting,
@@ -296,7 +298,7 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
                         glyph = { if (vm.scope == Scope.HALL) DuskGlyph() else Icon(Icons.Rounded.Lock, null, tint = V.accent, modifier = Modifier.size(40.dp)) },
                     )
                 }
-                LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 8.dp, top = 4.dp)) {
+                LazyColumn(state = listState, overscrollEffect = null, modifier = Modifier.fillMaxSize().then(Modifier.springOverscroll()), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 8.dp, top = 4.dp)) {
                     itemsIndexed(items, key = { _, m -> m.localId }) { i, m ->
                         val prev = items.getOrNull(i - 1)
                         val next = items.getOrNull(i + 1)

@@ -7,6 +7,7 @@ import com.rajdeep.vesper.shared.ApiError
 import com.rajdeep.vesper.shared.AuthRequest
 import com.rajdeep.vesper.shared.DeviceList
 import com.rajdeep.vesper.shared.DirectAck
+import com.rajdeep.vesper.shared.DirectRead
 import com.rajdeep.vesper.shared.DirectSend
 import com.rajdeep.vesper.shared.FcmToken
 import com.rajdeep.vesper.shared.Frame
@@ -275,6 +276,7 @@ private fun Route.socket(s: Services) {
                         is HallSend -> s.hall.send(c, frame)
                         is DirectSend -> s.direct.send(c, frame)
                         is DirectAck -> { s.direct.ack(c, frame); null }
+                        is DirectRead -> { s.direct.read(c, frame); null }
                         is Ping -> Pong(ServerClock.now())
                         else -> null
                     }

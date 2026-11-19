@@ -17,6 +17,7 @@ object MsgState {
     const val SENT = 1
     const val DELIVERED = 2
     const val FAILED = 3
+    const val READ = 4
     const val SYSTEM = 9
 }
 
@@ -141,7 +142,7 @@ interface MessageDao {
     @Query("UPDATE messages SET state = 0, error = NULL WHERE localId = :id")
     suspend fun retry(id: String)
 
-    @Query("UPDATE messages SET state = 2 WHERE serverId = :sid AND state = 1")
+    @Query("UPDATE messages SET state = 2 WHERE serverId = :sid AND state = 1 AND outgoing = 1")
     suspend fun markDelivered(sid: String)
 
     @Query("UPDATE messages SET mediaJson = :json WHERE localId = :id")
@@ -149,6 +150,12 @@ interface MessageDao {
 
     @Query("UPDATE messages SET read = 1 WHERE scope='direct' AND peerId = :peer AND read = 0")
     suspend fun markRead(peer: String)
+
+    @Query("SELECT serverId FROM messages WHERE scope='direct' AND peerId = :peer AND read = 0 AND outgoing = 0 AND serverId IS NOT NULL")
+    suspend fun unreadServerIds(peer: String): List<String>
+
+    @Query("UPDATE messages SET state = 4 WHERE serverId IN (:sids) AND outgoing = 1 AND state IN (1, 2)")
+    suspend fun markSeen(sids: List<String>)
 
     @Query("SELECT * FROM messages WHERE expiresAt IS NOT NULL AND expiresAt <= :now")
     suspend fun expired(now: Long): List<MessageEntity>

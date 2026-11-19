@@ -290,6 +290,10 @@ sealed interface Frame
 @Serializable @SerialName("hall.send") data class HallSend(val cmid: String, val kind: MessageKind, val body: MessageBody) : Frame
 @Serializable @SerialName("direct.send") data class DirectSend(val cmid: String, val toUserId: String, val kind: MessageKind, val mediaId: String? = null, val envelopes: List<OutEnvelope>) : Frame
 @Serializable @SerialName("direct.ack") data class DirectAck(val ids: List<String>) : Frame
+/** Client → server: I have seen these messages (message ids) from [peerId]. Relayed to the sender as [DirectSeen]. */
+@Serializable @SerialName("direct.read") data class DirectRead(val peerId: String, val mids: List<String>) : Frame
+/** Server → sender: [byUserId] has seen these messages (blue ticks). */
+@Serializable @SerialName("direct.seen") data class DirectSeen(val mids: List<String>, val byUserId: String) : Frame
 @Serializable @SerialName("ping") data class Ping(val at: Long = 0) : Frame
 
 @Serializable @SerialName("pong") data class Pong(val serverTime: Long) : Frame

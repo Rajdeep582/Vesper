@@ -50,6 +50,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.fillMaxSize
+import kotlinx.coroutines.launch
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
@@ -425,4 +429,92 @@ fun Modifier.bubbleIn(fresh: Boolean, mine: Boolean): Modifier {
         alpha = v.coerceIn(0f, 1f); translationY = (1f - v) * 14.dp.toPx()
         scaleX = 0.9f + 0.1f * v; scaleY = scaleX
     }
+}
+
+/**
+ * iOS-style spring overscroll for any scrollable child: rubber-band pull past the edges while dragging, and a spring
+ * bounce when a fling hits the end. Pair with `overscrollEffect = null` on the list so the system stretch doesn't double up.
+ */
+@Composable
+fun Modifier.springOverscroll(): Modifier {
+    val offset = remember { androidx.compose.animation.core.Animatable(0f) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val conn = remember {
+        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+            override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): androidx.compose.ui.geometry.Offset {
+                val o = offset.value
+                // While stretched, a drag back toward rest first relaxes the stretch.
+                if (o != 0f && source == androidx.compose.ui.input.nestedscroll.NestedScrollSource.UserInput && kotlin.math.sign(available.y) != kotlin.math.sign(o)) {
+                    val next = if (kotlin.math.abs(available.y) >= kotlin.math.abs(o)) 0f else o + available.y
+                    scope.launch { offset.snapTo(next) }
+                    return androidx.compose.ui.geometry.Offset(0f, next - o)
+                }
+                return androidx.compose.ui.geometry.Offset.Zero
+            }
+            override fun onPostScroll(consumed: androidx.compose.ui.geometry.Offset, available: androidx.compose.ui.geometry.Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): androidx.compose.ui.geometry.Offset {
+                if (source == androidx.compose.ui.input.nestedscroll.NestedScrollSource.UserInput && available.y != 0f) {
+                    val o = offset.value
+                    val resistance = 1f / (1f + kotlin.math.abs(o) / 140f) // rubber band
+                    scope.launch { offset.snapTo(o + available.y * 0.5f * resistance) }
+                    return available
+                }
+                return androidx.compose.ui.geometry.Offset.Zero
+            }
+            override suspend fun onPreFling(available: androidx.compose.ui.unit.Velocity): androidx.compose.ui.unit.Velocity {
+                if (offset.value != 0f) {
+                    offset.animateTo(0f, androidx.compose.animation.core.spring(dampingRatio = 0.62f, stiffness = 260f))
+                    return available
+                }
+                return androidx.compose.ui.unit.Velocity.Zero
+            }
+            override suspend fun onPostFling(consumed: androidx.compose.ui.unit.Velocity, available: androidx.compose.ui.unit.Velocity): androidx.compose.ui.unit.Velocity {
+                if (kotlin.math.abs(available.y) > 50f) {
+                    // Fling hit an edge: overshoot proportional to leftover velocity, then settle.
+                    offset.animateTo(0f, androidx.compose.animation.core.spring(dampingRatio = 0.5f, stiffness = 220f), initialVelocity = available.y * 0.35f)
+                } else if (offset.value != 0f) {
+                    offset.animateTo(0f, androidx.compose.animation.core.spring(dampingRatio = 0.62f, stiffness = 260f))
+                }
+                return available
+            }
+        }
+    }
+    return this.nestedScroll(conn).graphicsLayer { translationY = offset.value }
+}
+
+/**
+ * Chat backdrop: deep tonal gradient tinted by the space accent, a faint dot grid, and sparse dim stars.
+ * Kept very low-contrast so bubbles and text stay perfectly readable. Drawn once and cached.
+ */
+@Composable
+fun ChatBackdrop(modifier: Modifier = Modifier) {
+    val accent = V.accent
+    val bg = V.c.bg
+    val dark = V.c.dark
+    val dot = V.c.text.copy(alpha = if (dark) 0.045f else 0.06f)
+    androidx.compose.foundation.layout.Spacer(
+        modifier.fillMaxSize().drawWithCache {
+            val glowTop = androidx.compose.ui.graphics.Brush.radialGradient(
+                listOf(accent.copy(alpha = if (dark) 0.10f else 0.08f), androidx.compose.ui.graphics.Color.Transparent),
+                center = androidx.compose.ui.geometry.Offset(size.width * 0.85f, 0f), radius = size.width * 1.1f,
+            )
+            val glowBottom = androidx.compose.ui.graphics.Brush.radialGradient(
+                listOf(accent.copy(alpha = if (dark) 0.06f else 0.05f), androidx.compose.ui.graphics.Color.Transparent),
+                center = androidx.compose.ui.geometry.Offset(0f, size.height), radius = size.width * 0.9f,
+            )
+            val step = 26.dp.toPx(); val r = 0.9.dp.toPx()
+            val rnd = java.util.Random(7)
+            val stars = List(42) { androidx.compose.ui.geometry.Offset(rnd.nextFloat() * size.width, rnd.nextFloat() * size.height) to (0.6f + rnd.nextFloat() * 1.1f) }
+            onDrawBehind {
+                drawRect(bg)
+                drawRect(glowTop); drawRect(glowBottom)
+                var y = step / 2
+                while (y < size.height) {
+                    var x = step / 2
+                    while (x < size.width) { drawCircle(dot, r, androidx.compose.ui.geometry.Offset(x, y)); x += step }
+                    y += step
+                }
+                stars.forEach { (p, sz) -> drawCircle(accent.copy(alpha = if (dark) 0.16f else 0.10f), sz.dp.toPx(), p) }
+            }
+        },
+    )
 }

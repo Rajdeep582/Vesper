@@ -106,7 +106,11 @@ class Messages @Inject constructor(
     fun direct(peer: String): Flow<List<MessageEntity>> = dao.direct(peer)
     fun conversations() = dao.conversations()
     fun unreadDirect() = dao.unreadDirect()
-    suspend fun markRead(peer: String) = dao.markRead(peer)
+    suspend fun markRead(peer: String) {
+        val sids = dao.unreadServerIds(peer)
+        dao.markRead(peer)
+        if (sids.isNotEmpty()) runCatching { rt.send(com.rajdeep.vesper.shared.DirectRead(peer, sids)) }
+    }
 
     private fun me() = session.current() ?: error("signed out")
     private fun newCmid() = UUID.randomUUID().toString()
@@ -288,6 +292,7 @@ class Messages @Inject constructor(
             }
             is DirectEnv -> if (receiveEnvelope(f.env, live = true)) rt.send(DirectAck(listOf(f.env.id)))
             is DirectDelivered -> dao.markDelivered(f.mid)
+            is com.rajdeep.vesper.shared.DirectSeen -> dao.markSeen(f.mids)
             is HallMuted -> _hallMutedUntil.value = f.until?.takeIf { it > 0 } ?: if (f.until == null) Long.MAX_VALUE else null
             is AccountEnded -> session.end(f.reason)
             else -> {}
