@@ -175,6 +175,18 @@ private fun Route.memberRoutes(s: Services) {
     post("/auth/signout") { s.accounts.signOut(call.caller()); call.respond(Ok()) }
     get("/me") { call.respond(s.accounts.me(call.caller())) }
     get("/me/devices") { call.respond(s.admin.devices(call.caller())) }
+    post("/me/devices/{d}/signout") {
+        val c = call.caller()
+        val d = call.parameters["d"]?.toIntOrNull() ?: bad("device", "Bad device")
+        if (d == c.did) bad("device", "Use Sign out for this phone")
+        s.accounts.revokeDevice(c.uid, d, "signed_out")
+        call.respond(Ok())
+    }
+    post("/me/devices/signout-others") {
+        val c = call.caller()
+        s.accounts.deviceIds(c.uid).filter { it != c.did }.forEach { s.accounts.revokeDevice(c.uid, it, "signed_out") }
+        call.respond(Ok())
+    }
     post("/me/password") {
         val b = call.receive<PasswordChange>()
         s.accounts.changePassword(call.caller(), b.current, b.next, b.username)

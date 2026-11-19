@@ -99,6 +99,8 @@ class AuthRepository @Inject constructor(
     }
 
     suspend fun myDevices(): AdminDeviceList = api.get("/v1/me/devices", AdminDeviceList.serializer())
+    suspend fun signOutDevice(d: Int) { api.postEmpty("/v1/me/devices/$d/signout", Ok.serializer()) }
+    suspend fun signOutOthers() { api.postEmpty("/v1/me/devices/signout-others", Ok.serializer()) }
 }
 
 @Singleton

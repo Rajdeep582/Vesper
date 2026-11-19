@@ -342,7 +342,16 @@ class YouViewModel @Inject constructor(private val auth: AuthRepository, private
     val message = MutableStateFlow<String?>(null)
     val busy = MutableStateFlow(false)
 
-    init { viewModelScope.launch { runCatching { auth.myDevices() }.onSuccess { devices.value = it.items } } }
+    init { loadDevices() }
+    fun loadDevices() = viewModelScope.launch { runCatching { auth.myDevices() }.onSuccess { devices.value = it.items } }
+    fun signOutDevice(d: Int) = viewModelScope.launch {
+        runCatching { auth.signOutDevice(d) }.onSuccess { message.value = "Device signed out"; loadDevices() }
+            .onFailure { message.value = (it as? ApiException)?.message ?: "Couldn't sign out device" }
+    }
+    fun signOutOthers() = viewModelScope.launch {
+        runCatching { auth.signOutOthers() }.onSuccess { message.value = "Other devices signed out"; loadDevices() }
+            .onFailure { message.value = (it as? ApiException)?.message ?: "Couldn't sign out devices" }
+    }
 
     fun theme(t: ThemeMode) = viewModelScope.launch { settings.setTheme(t) }
     fun sounds(v: Boolean) = viewModelScope.launch { settings.setSounds(v) }
@@ -407,17 +416,24 @@ fun YouScreen(vm: YouViewModel = hiltViewModel()) {
             Group {
                 InfoRow("Disappearing by design", "Text disappears 72 hours after the server accepts it; voice and photos after 24 hours — from the server and this phone.")
             }
-            if (me?.isAdmin == true) {
-                SectionLabel("Signed in as administrator")
-                Group {
+            SectionLabel(if (me?.isAdmin == true) "Devices signed in as administrator" else "Devices")
+            Group {
+                if (me?.isAdmin == true) {
                     InfoRow("Shared credentials", "Anyone who signs in with the admin credentials becomes another device of this identity and receives new private messages sent to it from then on.")
-                    devices.forEach { d ->
-                        Hairline()
-                        ListRow { Column(Modifier.weight(1f)) {
-                            Text(d.label + if (d.current) "  · this phone" else "", style = V.t.subhead, color = V.c.text)
-                            Text("Last seen " + clock(d.lastSeenAt) + " · " + dayLabel(d.lastSeenAt), style = V.t.label, color = V.c.text2)
-                        } }
-                    }
+                    Hairline()
+                }
+                devices.forEachIndexed { i, d ->
+                    if (i > 0) Hairline()
+                    ListRow(trailing = if (d.current) null else ({
+                        Text("Sign out", style = V.t.label, color = V.c.error, modifier = Modifier.clip(RoundedCornerShape(10.dp)).pressable { vm.signOutDevice(d.deviceId) }.padding(10.dp))
+                    })) { Column(Modifier.weight(1f)) {
+                        Text(d.label + if (d.current) "  · this phone" else "", style = V.t.subhead, color = V.c.text)
+                        Text("Last seen " + clock(d.lastSeenAt) + " · " + dayLabel(d.lastSeenAt), style = V.t.label, color = V.c.text2)
+                    } }
+                }
+                if (devices.count { !it.current } > 0) {
+                    Hairline()
+                    ListRow(onClick = { vm.signOutOthers() }) { Text("Sign out all other devices", style = V.t.body, color = V.c.error, modifier = Modifier.weight(1f)) }
                 }
             }
             SectionLabel("Account")
