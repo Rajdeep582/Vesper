@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -197,6 +198,7 @@ fun PeopleScreen(onProfile: (String) -> Unit, vm: PeopleViewModel = hiltViewMode
     val q by vm.query.collectAsState()
     val res by vm.results.collectAsState()
     val err by vm.error.collectAsState()
+    LaunchedEffect(Unit) { vm.search(vm.query.value) }
     Column(Modifier.fillMaxSize().background(V.c.bg).statusBarsPadding()) {
         ScreenHeader("People", "Everyone on Vesper", accentDot = false)
         Row(
@@ -260,7 +262,7 @@ fun ProfileScreen(onBack: () -> Unit, onMessage: (String) -> Unit, vm: ProfileVi
             if (!vm.isMe && u != null) {
                 PrimaryButton("Message privately", Modifier.fillMaxWidth(), color = V.c.direct) { onMessage(vm.id) }
                 Spacer(Modifier.height(12.dp))
-                Text("Private messages are end-to-end encrypted. The administrator can see that you talk and when, never what you say.", style = V.t.label, color = V.c.text3)
+                Text("Private messages are end-to-end encrypted.", style = V.t.label, color = V.c.text3)
             }
         }
     }
@@ -347,9 +349,9 @@ class YouViewModel @Inject constructor(private val auth: AuthRepository, private
     fun haptics(v: Boolean) = viewModelScope.launch { settings.setHaptics(v) }
     fun motion(v: Boolean) = viewModelScope.launch { settings.setReduceMotion(v) }
     fun signOut() = viewModelScope.launch { busy.value = true; auth.signOut() }
-    fun changePassword(cur: String, next: String, done: () -> Unit) = viewModelScope.launch {
+    fun changePassword(u: String, cur: String, next: String, done: () -> Unit) = viewModelScope.launch {
         busy.value = true
-        runCatching { auth.changePassword(cur, next) }.onSuccess { message.value = "Password changed. Other devices will need to sign in again."; done() }
+        runCatching { auth.changePassword(u, cur, next) }.onSuccess { message.value = "Password changed. Other devices will need to sign in again."; done() }
             .onFailure { message.value = (it as? ApiException)?.message ?: "Couldn't change password" }
         busy.value = false
     }
@@ -403,8 +405,6 @@ fun YouScreen(vm: YouViewModel = hiltViewModel()) {
             }
             SectionLabel("Privacy")
             Group {
-                InfoRow("What the administrator can see", "Username, join date, presence and last active, Hall activity, and who you message privately and when — never private content.")
-                Hairline()
                 InfoRow("Disappearing by design", "Text disappears 72 hours after the server accepts it; voice and photos after 24 hours — from the server and this phone.")
             }
             if (me?.isAdmin == true) {
@@ -438,17 +438,15 @@ fun YouScreen(vm: YouViewModel = hiltViewModel()) {
         }
     }
     when (sheet) {
-        "password" -> ModalBottomSheet({ sheet = null }, containerColor = V.c.s1) {
-            var cur by remember { mutableStateOf("") }; var next by remember { mutableStateOf("") }
-            SheetTitle("Change password", "Other devices signed in to this account will be signed out.")
-            Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                VField(cur, { cur = it }, "Current password", password = true)
-                VField(next, { next = it }, "New password", password = true, helper = "At least 10 characters")
-                PrimaryButton("Change password", Modifier.fillMaxWidth(), enabled = cur.isNotEmpty() && next.length >= 10, loading = busy) { vm.changePassword(cur, next) { sheet = null } }
+        "password" -> ModalBottomSheet({ sheet = null }, sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = V.c.s1) {
+            Column(Modifier.imePadding().verticalScroll(rememberScrollState())) {
+                SheetTitle("Change password", "Other devices signed in to this account will be signed out.")
+                com.rajdeep.vesper.ui.auth.PasswordForm(busy) { u, cur, next -> vm.changePassword(u, cur, next) { sheet = null } }
+                msg?.let { Text(it, style = V.t.bodySmall, color = V.c.text, modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) }
+                Spacer(Modifier.height(32.dp))
             }
-            Spacer(Modifier.height(32.dp))
         }
-        "delete" -> ModalBottomSheet({ sheet = null }, containerColor = V.c.s1) {
+        "delete" -> ModalBottomSheet({ sheet = null }, sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = V.c.s1) {
             var pw by remember { mutableStateOf("") }
             SheetTitle("Delete account", "Your account, keys and everything you posted are removed from the server and this phone right away. This can't be undone.")
             Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

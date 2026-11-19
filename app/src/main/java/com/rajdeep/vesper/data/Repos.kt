@@ -28,6 +28,7 @@ import com.rajdeep.vesper.shared.MemberPage
 import com.rajdeep.vesper.shared.MuteRequest
 import com.rajdeep.vesper.shared.Ok
 import com.rajdeep.vesper.shared.PasswordChange
+import com.rajdeep.vesper.shared.PasswordReset
 import com.rajdeep.vesper.shared.PasswordConfirm
 import com.rajdeep.vesper.shared.UserPage
 import com.rajdeep.vesper.shared.UserSummary
@@ -75,8 +76,13 @@ class AuthRepository @Inject constructor(
         session.end("signed_out")
     }
 
-    suspend fun changePassword(current: String, next: String) {
-        api.post("/v1/me/password", PasswordChange(current, next), PasswordChange.serializer(), Ok.serializer())
+    suspend fun changePassword(username: String, current: String, next: String) {
+        api.post("/v1/me/password", PasswordChange(current, next, username), PasswordChange.serializer(), Ok.serializer())
+    }
+
+    /** Signed-out change: verified by username + current password; ends all sessions of that account. */
+    suspend fun resetPassword(username: String, current: String, next: String) {
+        api.post("/v1/auth/password", PasswordReset(username, current, next), PasswordReset.serializer(), Ok.serializer(), auth = false)
     }
 
     suspend fun deleteAccount(password: String) {

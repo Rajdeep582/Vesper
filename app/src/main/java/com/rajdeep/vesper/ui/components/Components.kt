@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -352,7 +353,7 @@ fun Toggle(checked: Boolean, onChange: (Boolean) -> Unit) {
             .clickable(remember { MutableInteractionSource() }, null, role = Role.Switch) { fb.tick(); onChange(!checked) }
             .padding(3.dp),
     ) {
-        Box(Modifier.padding(start = (18 * x).dp).size(22.dp).clip(CircleShape).background(if (checked) V.c.onAccent else V.c.text2))
+        Box(Modifier.offset(x = (18 * x).dp).size(22.dp).clip(CircleShape).background(if (checked) V.c.onAccent else V.c.text2))
     }
 }
 

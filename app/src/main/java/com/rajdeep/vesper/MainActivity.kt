@@ -211,6 +211,8 @@ class MainActivity : ComponentActivity() {
         val tabs = Tab.entries.filter { it != Tab.CONSOLE || isAdmin }
         val unread by messages.unreadDirect().collectAsState(0)
         val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+        androidx.activity.compose.BackHandler(enabled = tab != Tab.HALL) { tab = Tab.HALL }
+        LaunchedEffect(isAdmin) { if (tab == Tab.CONSOLE && !isAdmin) tab = Tab.HALL }
         Column(Modifier.fillMaxSize().background(V.c.bg)) {
             Box(Modifier.weight(1f)) {
                 AnimatedContent(tab, transitionSpec = {

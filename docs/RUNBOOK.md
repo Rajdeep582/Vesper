@@ -8,6 +8,8 @@
    Settings → Backup: keep **off** (otherwise deleted files are retained).
 3. **Secrets** — `./gradlew :server:genSecret` → `JWT_SECRET`, `./gradlew :server:genKeyset` → `HALL_DATA_KEYSET`,
    `./gradlew :server:hashPassword --args="hash <your admin password>"` → `ADMIN_PASSWORD_ARGON2`; choose `ADMIN_USERNAME`.
+   (Already generated locally: `.dev/RENDER_ENV.txt` holds every value to paste; `.dev/ADMIN_CREDENTIALS.txt` the admin login.
+   Both are git-ignored.)
 4. **Render** — New → Blueprint → this repo (`render.yaml`, Free, Singapore). Paste the env vars. Set
    `PUBLIC_BASE_URL` to the service URL.
 5. **Keep-awake** — cron-job.org (free): GET `https://<service>.onrender.com/health` every 10 minutes. Optionally set the
@@ -19,7 +21,10 @@
 
 | Task | How |
 |---|---|
-| Rotate admin password | regenerate `ADMIN_PASSWORD_ARGON2`, redeploy (env hash change wins over in-app change) |
+| Change any password | App → You → Change password, or the sign-in page → Change password (username + old + new + confirm) |
+| Admin identity | created once on first start from `ADMIN_USERNAME` / `ADMIN_PASSWORD_ARGON2`; can't be deleted, suspended or muted |
+| Reset admin password (forgotten) | regenerate `ADMIN_PASSWORD_ARGON2`, redeploy (a changed env hash overrides the in-app password) |
+| Run locally against production | `.\tools\dev\run-server.ps1 -EnvFile .dev\prod.env` + `adb reverse tcp:8080 tcp:8080` |
 | Rotate JWT secret | change `JWT_SECRET`, redeploy — everyone refreshes / signs in again |
 | Rotate Hall keyset | add a new primary key to the Tink keyset keeping old keys, redeploy |
 | Quotas | Console → Overview: DB vs 512 MB, Cloudinary credits vs 25 (warnings at 70/90 %) |

@@ -334,6 +334,7 @@ private fun ActivityRow(e: ActivityEvent) {
         "muted" -> "was muted in the Hall" to V.c.hall
         "unmuted" -> "was unmuted" to V.c.text2
         "account_deleted" -> "account deleted" to V.c.error
+        "password_changed" -> "changed password" to V.c.text2
         else -> e.type to V.c.text2
     }
     ListRow(leading = { Box(Modifier.size(8.dp).clip(CircleShape).background(color)) }) {

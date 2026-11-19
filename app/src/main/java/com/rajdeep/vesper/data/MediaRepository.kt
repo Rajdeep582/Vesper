@@ -70,13 +70,18 @@ class MediaRepository @Inject constructor(
             else -> {
                 val mp = MultipartBody.Builder().setType(MultipartBody.FORM).apply {
                     t.fields.forEach { (k, v) -> addFormDataPart(k, v) }
-                    addFormDataPart(t.fileField ?: "file", "blob.bin", body)
+                    // No extension: Cloudinary may block .bin raw uploads ("resources with extension bin are not allowed").
+                    addFormDataPart(t.fileField ?: "file", "blob", body)
                 }.build()
                 Request.Builder().url(t.url).post(mp).apply { t.headers.forEach { (k, v) -> header(k, v) } }.build()
             }
         }
         val (code, resp) = api.external(req)
-        if (code !in 200..299) throw ApiException(code, "upload", "Upload failed ($code)")
+        if (code !in 200..299) {
+            val why = runCatching { Json.parseToJsonElement(String(resp)).jsonObject["error"]!!.jsonObject["message"]!!.jsonPrimitive.content }.getOrNull()
+            android.util.Log.w("VesperMedia", "upload $code: ${String(resp).take(300)}")
+            throw ApiException(code, "upload", "Upload failed ($code)" + (why?.let { ": $it" } ?: ""))
+        }
         val provider = runCatching {
             Json.parseToJsonElement(String(resp)).jsonObject.mapNotNull { (k, v) -> runCatching { k to v.jsonPrimitive.content }.getOrNull() }.toMap()
         }.getOrDefault(emptyMap())

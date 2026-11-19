@@ -119,7 +119,12 @@ class Api @Inject constructor(private val session: SessionManager) {
         if (failedToken != null && s.accessToken != failedToken) return true
         val body = VesperJson.encodeToString(RefreshRequest.serializer(), RefreshRequest(s.refreshToken)).toRequestBody(json)
         val (code, text) = runCatching { raw("POST", "/v1/auth/refresh", body, auth = false) }.getOrElse { return false }
-        if (code != 200) return false
+        if (code != 200) {
+            // Server definitively rejected the refresh token: the session is over (revoked, password changed, suspended).
+            if (code == 401) session.end("expired")
+            if (code == 403) session.end(if (text.contains("suspended")) "suspended" else "expired")
+            return false
+        }
         val pair = VesperJson.decodeFromString(TokenPair.serializer(), text)
         session.updateTokens(pair)
         true

@@ -159,8 +159,9 @@ class Accounts(
         hub.kickUser(uid, AccountEnded(reason))
     }
 
-    suspend fun changePassword(c: Caller, current: String, next: String) {
+    suspend fun changePassword(c: Caller, current: String, next: String, username: String = "") {
         val user = db.users.one(Document("_id", c.uid)) ?: unauthorized()
+        if (username.isNotBlank() && username.trim().lowercase() != user.str("u")) bad("username", "Username doesn't match this account")
         val ok = withContext(Dispatchers.Default) { Passwords.verify(current, user.str("ph")) }
         if (!ok) bad("password", "Current password is wrong")
         Limits.passwordProblem(next)?.let { bad("password", it) }
@@ -169,6 +170,27 @@ class Accounts(
         db.users.updateOne(Document("_id", c.uid), Updates.set("ph", hash))
         // Other sessions must sign in again.
         db.refresh.deleteMany(Filters.and(Filters.eq("uid", c.uid), Filters.ne("d", c.did)))
+    }
+
+    /** Signed-out password change: username + current password. Ends every session of the account. */
+    suspend fun resetPassword(username: String, current: String, next: String, ip: String) {
+        val u = username.trim().lowercase()
+        val key = "$u|$ip"
+        if (!signInLimiter.allow(key)) tooMany()
+        val user = db.users.one(Document("u", u))
+        val ok = withContext(Dispatchers.Default) { Passwords.verify(current, user?.str("ph")) }
+        if (user == null || !ok) unauthorized("Wrong username or password")
+        if (user.str("st") == "suspended") forbidden("suspended", "This account is suspended")
+        Limits.passwordProblem(next)?.let { bad("password", it) }
+        if (CommonPasswords.contains(next)) bad("password", "That password is too common")
+        if (next == current) bad("password", "New password must be different")
+        signInLimiter.reset(key)
+        val hash = withContext(Dispatchers.Default) { Passwords.hash(next) }
+        val uid = user.str("_id")!!
+        db.users.updateOne(Document("_id", uid), Updates.set("ph", hash))
+        db.refresh.deleteMany(Document("uid", uid))
+        hub.kickUser(uid, AccountEnded("password_changed"))
+        activity.record("password_changed", uid, u)
     }
 
     suspend fun verifyPassword(c: Caller, password: String) {

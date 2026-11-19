@@ -18,6 +18,7 @@ import com.rajdeep.vesper.shared.Nack
 import com.rajdeep.vesper.shared.Nacks
 import com.rajdeep.vesper.shared.Ok
 import com.rajdeep.vesper.shared.PasswordChange
+import com.rajdeep.vesper.shared.PasswordReset
 import com.rajdeep.vesper.shared.PasswordConfirm
 import com.rajdeep.vesper.shared.Ping
 import com.rajdeep.vesper.shared.Pong
@@ -163,6 +164,11 @@ private fun Route.authRoutes(s: Services) {
     post("/auth/signup") { call.respond(s.accounts.signUp(call.receive<AuthRequest>(), call.ip())) }
     post("/auth/signin") { call.respond(s.accounts.signIn(call.receive<AuthRequest>(), call.ip())) }
     post("/auth/refresh") { call.respond(s.accounts.refresh(call.receive<RefreshRequest>().refreshToken)) }
+    post("/auth/password") {
+        val b = call.receive<PasswordReset>()
+        s.accounts.resetPassword(b.username, b.current, b.next, call.ip())
+        call.respond(Ok())
+    }
 }
 
 private fun Route.memberRoutes(s: Services) {
@@ -171,7 +177,7 @@ private fun Route.memberRoutes(s: Services) {
     get("/me/devices") { call.respond(s.admin.devices(call.caller())) }
     post("/me/password") {
         val b = call.receive<PasswordChange>()
-        s.accounts.changePassword(call.caller(), b.current, b.next)
+        s.accounts.changePassword(call.caller(), b.current, b.next, b.username)
         call.respond(Ok())
     }
     post("/me/delete") {
