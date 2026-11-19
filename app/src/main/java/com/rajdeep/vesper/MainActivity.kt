@@ -61,6 +61,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
@@ -258,7 +259,8 @@ class MainActivity : ComponentActivity() {
                             verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
                         ) {
                             Box {
-                                Icon(t.icon, null, tint = tint, modifier = Modifier.size(22.dp))
+                                val pop by androidx.compose.animation.core.animateFloatAsState(if (sel) 1.12f else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.45f, stiffness = 500f), label = "pop")
+                                Icon(t.icon, null, tint = tint, modifier = Modifier.size(22.dp).graphicsLayer { scaleX = pop; scaleY = pop; translationY = (pop - 1f) * -10f })
                                 if (t == Tab.DIRECT) {
                                     Reveal(unread > 0, modifier = Modifier.align(Alignment.TopEnd).offset(x = 6.dp, y = (-3).dp), enter = scaleIn(Motion.bouncy()), exit = scaleOut()) {
                                         Box(Modifier.size(9.dp).clip(CircleShape).background(V.c.direct).border(1.5.dp, V.c.s1, CircleShape))

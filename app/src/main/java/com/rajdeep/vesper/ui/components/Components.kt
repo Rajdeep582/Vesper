@@ -50,6 +50,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
@@ -396,3 +397,32 @@ fun Reveal(
     exit: androidx.compose.animation.ExitTransition = fadeOut(),
     content: @Composable androidx.compose.animation.AnimatedVisibilityScope.() -> Unit,
 ) = AnimatedVisibility(visible = visible, modifier = modifier, enter = enter, exit = exit, content = content)
+
+/** One-shot entrance: rise + fade + slight scale, staggered by [index] (capped) — used for list rows on first show. */
+@Composable
+fun Modifier.staggerIn(index: Int, key: Any? = Unit): Modifier {
+    val p = remember(key) { androidx.compose.animation.core.Animatable(0f) }
+    androidx.compose.runtime.LaunchedEffect(key) {
+        kotlinx.coroutines.delay(minOf(index, 10) * 32L)
+        p.animateTo(1f, androidx.compose.animation.core.spring(dampingRatio = 0.82f, stiffness = 380f))
+    }
+    return this.graphicsLayer {
+        val v = p.value
+        alpha = v.coerceIn(0f, 1f); translationY = (1f - v) * 18.dp.toPx()
+        scaleX = 0.97f + 0.03f * v; scaleY = scaleX
+    }
+}
+
+/** Entrance for a freshly sent/received chat bubble: springs up from its own corner. Old messages render still. */
+@Composable
+fun Modifier.bubbleIn(fresh: Boolean, mine: Boolean): Modifier {
+    if (!fresh) return this
+    val p = remember { androidx.compose.animation.core.Animatable(0f) }
+    androidx.compose.runtime.LaunchedEffect(Unit) { p.animateTo(1f, androidx.compose.animation.core.spring(dampingRatio = 0.72f, stiffness = 420f)) }
+    return this.graphicsLayer {
+        val v = p.value
+        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(if (mine) 1f else 0f, 1f)
+        alpha = v.coerceIn(0f, 1f); translationY = (1f - v) * 14.dp.toPx()
+        scaleX = 0.9f + 0.1f * v; scaleY = scaleX
+    }
+}

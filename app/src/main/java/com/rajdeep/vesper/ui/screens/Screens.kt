@@ -91,6 +91,8 @@ import com.rajdeep.vesper.ui.components.Surface
 import com.rajdeep.vesper.ui.components.Toggle
 import com.rajdeep.vesper.ui.components.VField
 import com.rajdeep.vesper.ui.components.pressable
+import com.rajdeep.vesper.ui.components.staggerIn
+import androidx.compose.foundation.lazy.itemsIndexed
 import com.rajdeep.vesper.ui.theme.Motion
 import com.rajdeep.vesper.ui.theme.V
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -128,7 +130,7 @@ fun DirectListScreen(onOpen: (String) -> Unit, onFindPeople: () -> Unit, vm: Dir
             }
             else -> LazyColumn(Modifier.fillMaxSize()) {
                 items(rows!!, key = { it.peerId }) { r ->
-                    Box(Modifier.animateItem(placementSpec = Motion.offsetSpring)) { ConversationItem(r) { onOpen(r.peerId) } }
+                    Box(Modifier.animateItem(placementSpec = Motion.offsetSpring).staggerIn(rows!!.indexOf(r), r.peerId)) { ConversationItem(r) { onOpen(r.peerId) } }
                 }
             }
         }
@@ -217,8 +219,8 @@ fun PeopleScreen(onProfile: (String) -> Unit, vm: PeopleViewModel = hiltViewMode
             res == null -> SkeletonRows()
             res!!.isEmpty() -> EmptyState("No one by that name", "Usernames use a–z, 0–9, _ and .")
             else -> LazyColumn(Modifier.fillMaxSize()) {
-                items(res!!, key = { it.id }) { u ->
-                    Box(Modifier.animateItem()) {
+                itemsIndexed(res!!, key = { _, it -> it.id }) { i, u ->
+                    Box(Modifier.animateItem().staggerIn(i, u.id)) {
                         ListRow(onClick = { onProfile(u.id) }, leading = { Monogram(u.username, 42.dp) }, trailing = { Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = V.c.text3) }) {
                             Column(Modifier.weight(1f)) {
                                 Text(u.username + if (u.id == vm.me) "  · you" else "", style = V.t.subhead, color = V.c.text)

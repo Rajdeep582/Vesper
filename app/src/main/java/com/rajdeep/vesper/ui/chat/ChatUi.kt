@@ -1,5 +1,6 @@
 package com.rajdeep.vesper.ui.chat
 
+import com.rajdeep.vesper.ui.components.bubbleIn
 import com.rajdeep.vesper.ui.components.Reveal
 import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedContent
@@ -159,8 +160,10 @@ fun MessageBubble(
     val shape = if (mine) RoundedCornerShape(big, if (groupedWithPrev) small else big, if (groupedWithNext) small else small, big)
     else RoundedCornerShape(if (groupedWithPrev) small else big, big, big, if (groupedWithNext) small else small)
 
+    val fresh = remember(m.localId) { kotlin.math.abs(System.currentTimeMillis() - m.createdAt) < 4_000 }
     Row(
-        Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = if (groupedWithPrev) 2.dp else 10.dp),
+        Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = if (groupedWithPrev) 2.dp else 10.dp)
+            .then(Modifier.bubbleIn(fresh, mine)),
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Bottom,
     ) {
