@@ -255,6 +255,7 @@ class Messages @Inject constructor(
         if (session.current() == null) return
         runCatching { syncHall() }
         runCatching { syncDirect() }
+        runCatching { syncReceipts() }
         flush()
         runCatching { maintainPreKeys() }
     }
@@ -262,6 +263,7 @@ class Messages @Inject constructor(
     suspend fun syncAll() {
         runCatching { syncHall() }
         runCatching { syncDirect() }
+        runCatching { syncReceipts() }
     }
 
     suspend fun syncHall() = syncLock.withLock {
@@ -273,6 +275,15 @@ class Messages @Inject constructor(
             if (page.items.size < 200) break
             after = page.items.last().seq
         }
+    }
+
+    /** Catch up ✓✓ / blue ✓✓ that happened while this phone was offline. */
+    suspend fun syncReceipts() {
+        val ids = dao.unseenOutgoing()
+        if (ids.isEmpty()) return
+        val r = api.post("/v1/direct/receipts", com.rajdeep.vesper.shared.ReceiptQuery(ids), com.rajdeep.vesper.shared.ReceiptQuery.serializer(), com.rajdeep.vesper.shared.ReceiptState.serializer())
+        if (r.delivered.isNotEmpty()) dao.markDeliveredMany(r.delivered)
+        if (r.seen.isNotEmpty()) dao.markSeen(r.seen)
     }
 
     suspend fun syncDirect(): Int {

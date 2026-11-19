@@ -25,6 +25,8 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.border
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -221,6 +223,8 @@ class MainActivity : ComponentActivity() {
         val unread by messages.unreadDirect().collectAsState(0)
         val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
         androidx.activity.compose.BackHandler(enabled = tab != Tab.HALL) { tab = Tab.HALL }
+        val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+        val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
         LaunchedEffect(isAdmin) { if (tab == Tab.CONSOLE && !isAdmin) tab = Tab.HALL }
         Column(Modifier.fillMaxSize().background(V.c.bg)) {
             // The bar never hides: the keyboard simply covers it. Content consumes the bar + nav-bar height, so the chat
@@ -228,7 +232,8 @@ class MainActivity : ComponentActivity() {
             Box(
                 Modifier.weight(1f)
                     .consumeWindowInsets(WindowInsets.navigationBars)
-                    .consumeWindowInsets(androidx.compose.foundation.layout.PaddingValues(bottom = 80.dp)),
+                    .consumeWindowInsets(androidx.compose.foundation.layout.PaddingValues(bottom = 80.dp))
+                    .pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus(); keyboard?.hide() }) },
             ) {
                 AnimatedContent(tab, transitionSpec = {
                     val dir = if (targetState.ordinal > initialState.ordinal) 1 else -1

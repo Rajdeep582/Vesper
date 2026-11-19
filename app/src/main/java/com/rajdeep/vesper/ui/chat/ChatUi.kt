@@ -97,6 +97,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.rajdeep.vesper.core.db.MessageEntity
 import com.rajdeep.vesper.core.db.MsgState
+import com.rajdeep.vesper.core.db.Scope
 import com.rajdeep.vesper.media.BlurHash
 import com.rajdeep.vesper.media.VoicePlayer
 import com.rajdeep.vesper.shared.Limits
@@ -230,7 +231,9 @@ private fun Meta(m: MessageEntity, fraction: Float, modifier: Modifier = Modifie
         Text(clock(m.acceptedAt ?: m.createdAt), style = V.t.mono.copy(fontSize = V.t.caption.fontSize), color = V.c.text3)
         if (m.outgoing) {
             // WhatsApp rules: clock = sending, ✓ = sent (server has it), ✓✓ = delivered, blue ✓✓ = seen. Hall stops at ✓.
-            val (icon, tint) = when (m.state) {
+            // Hall: one tick once the server has it — no delivered/seen there.
+            val st = if (m.scope == Scope.HALL && (m.state == MsgState.DELIVERED || m.state == MsgState.READ)) MsgState.SENT else m.state
+            val (icon, tint) = when (st) {
                 MsgState.PENDING -> Icons.Rounded.Schedule to V.c.text3
                 MsgState.SENT -> Icons.Rounded.Done to V.c.text3
                 MsgState.DELIVERED -> Icons.Rounded.DoneAll to V.c.text3
@@ -239,7 +242,7 @@ private fun Meta(m: MessageEntity, fraction: Float, modifier: Modifier = Modifie
             }
             val animTint by animateColorAsState(tint, tween(Motion.L), label = "tick")
             AnimatedContent(icon, transitionSpec = { (scaleIn(Motion.bouncy(), initialScale = 0.4f) + fadeIn()) togetherWith fadeOut(tween(Motion.XS)) }, label = "state") { ic ->
-                Icon(ic, when (m.state) { MsgState.PENDING -> "Sending"; MsgState.SENT -> "Sent"; MsgState.DELIVERED -> "Delivered"; MsgState.READ -> "Seen"; else -> "Not sent" },
+                Icon(ic, when (st) { MsgState.PENDING -> "Sending"; MsgState.SENT -> "Sent"; MsgState.DELIVERED -> "Delivered"; MsgState.READ -> "Seen"; else -> "Not sent" },
                     tint = animTint, modifier = Modifier.size(15.dp))
             }
         }

@@ -292,6 +292,9 @@ sealed interface Frame
 @Serializable @SerialName("direct.ack") data class DirectAck(val ids: List<String>) : Frame
 /** Client → server: I have seen these messages (message ids) from [peerId]. Relayed to the sender as [DirectSeen]. */
 @Serializable @SerialName("direct.read") data class DirectRead(val peerId: String, val mids: List<String>) : Frame
+/** Sender asks for the current receipt state of its own sent-but-not-seen messages (catch-up after being offline). */
+@Serializable data class ReceiptQuery(val ids: List<String>)
+@Serializable data class ReceiptState(val delivered: List<String>, val seen: List<String>)
 /** Server → sender: [byUserId] has seen these messages (blue ticks). */
 @Serializable @SerialName("direct.seen") data class DirectSeen(val mids: List<String>, val byUserId: String) : Frame
 @Serializable @SerialName("ping") data class Ping(val at: Long = 0) : Frame

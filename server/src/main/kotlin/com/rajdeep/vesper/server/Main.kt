@@ -217,6 +217,7 @@ private fun Route.memberRoutes(s: Services) {
         call.respond(s.hall.page(after, limit))
     }
     get("/direct/pending") { call.respond(s.direct.pending(call.caller())) }
+    post("/direct/receipts") { call.respond(s.direct.receipts(call.caller(), call.receive<com.rajdeep.vesper.shared.ReceiptQuery>())) }
     post("/direct/ack") { s.direct.ack(call.caller(), DirectAck(call.receive<AckIds>().ids)); call.respond(Ok()) }
 
     post("/media/intents") { call.respond(s.media.intent(call.caller(), call.receive<MediaIntentRequest>())) }

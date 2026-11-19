@@ -234,6 +234,17 @@ class Direct(
         hub.toUser(r.peerId, DirectSeen(ids, c.uid))
     }
 
+    /** Receipt catch-up: only the caller's own messages; returns which are delivered and which are seen. */
+    suspend fun receipts(c: Caller, q: com.rajdeep.vesper.shared.ReceiptQuery): com.rajdeep.vesper.shared.ReceiptState {
+        if (q.ids.isEmpty()) return com.rajdeep.vesper.shared.ReceiptState(emptyList(), emptyList())
+        val docs = db.privateMeta.find(Filters.and(Filters.`in`("_id", q.ids.take(500)), Filters.eq("fromUid", c.uid)))
+            .projection(Document("del", 1).append("seen", 1)).toList()
+        return com.rajdeep.vesper.shared.ReceiptState(
+            delivered = docs.filter { it["del"] != null }.map { it.str("_id")!! },
+            seen = docs.filter { it["seen"] != null }.map { it.str("_id")!! },
+        )
+    }
+
     suspend fun ack(c: Caller, a: DirectAck) {
         if (a.ids.isEmpty()) return
         val ids = a.ids.take(500)

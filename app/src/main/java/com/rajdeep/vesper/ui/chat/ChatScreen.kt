@@ -289,7 +289,10 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
                 link == Link.CONNECTING -> "Connecting…"
                 else -> "Offline — messages will send when you're back"
             })
-            Box(Modifier.weight(1f)) {
+            val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+            val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+            // Tap any free space in the conversation to put the keyboard away.
+            Box(Modifier.weight(1f).pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus(); keyboard?.hide() }) }) {
                 if (items.isEmpty()) {
                     EmptyState(
                         title = if (vm.scope == Scope.HALL) "The Hall is quiet" else "A private space",

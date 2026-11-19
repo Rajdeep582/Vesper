@@ -154,6 +154,12 @@ interface MessageDao {
     @Query("SELECT serverId FROM messages WHERE scope='direct' AND peerId = :peer AND read = 0 AND outgoing = 0 AND serverId IS NOT NULL")
     suspend fun unreadServerIds(peer: String): List<String>
 
+    @Query("SELECT serverId FROM messages WHERE scope='direct' AND outgoing = 1 AND state IN (1, 2) AND serverId IS NOT NULL ORDER BY createdAt DESC LIMIT 500")
+    suspend fun unseenOutgoing(): List<String>
+
+    @Query("UPDATE messages SET state = 2 WHERE serverId IN (:sids) AND outgoing = 1 AND state = 1")
+    suspend fun markDeliveredMany(sids: List<String>)
+
     @Query("UPDATE messages SET state = 4 WHERE serverId IN (:sids) AND outgoing = 1 AND state IN (1, 2)")
     suspend fun markSeen(sids: List<String>)
 
