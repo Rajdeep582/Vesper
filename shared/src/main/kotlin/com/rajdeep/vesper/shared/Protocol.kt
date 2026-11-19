@@ -332,3 +332,5 @@ object Keep { const val FOREVER_MS = 100L * 365 * 24 * 3_600_000 }
 @Serializable data class BackupItems(val items: List<BackupItem>)
 @Serializable data class BackupIds(val ids: List<String>)
 @Serializable data class BackupKeyLookup(val username: String, val password: String)
+
+@Serializable data class OnlineCount(val count: Int)

@@ -66,6 +66,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -156,6 +158,13 @@ class ChatViewModel @Inject constructor(
     val myName get() = session.current()?.username ?: "someone"
     val peerUser = peer?.let { people.observe(it).stateIn(viewModelScope, SharingStarted.Eagerly, null) }
     val error = MutableStateFlow<String?>(null)
+    /** Hall only: members with a live connection, refreshed every 15 s while the Hall is open. */
+    val online = MutableStateFlow(0)
+    init {
+        if (peer == null) viewModelScope.launch {
+            while (true) { runCatching { messages.onlineCount() }.onSuccess { online.value = it }; kotlinx.coroutines.delay(15_000) }
+        }
+    }
     fun now() = session.now()
 
     init {
@@ -215,6 +224,7 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
     val muted by vm.mutedUntil.collectAsState()
     val peerUser = vm.peerUser?.collectAsState()?.value
     val err by vm.error.collectAsState()
+    val online by vm.online.collectAsState()
     val ctx = LocalContext.current
     val fb = V.fb
     val listState = rememberLazyListState()
@@ -271,7 +281,7 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
                 },
                 label = "header",
             ) { sel ->
-                if (!sel) ChatHeader(vm.scope, peerUser?.username, onBack, onOpenInfo, items.size, link)
+                if (!sel) ChatHeader(vm.scope, peerUser?.username, onBack, onOpenInfo, items.size, link, online)
                 else {
                     val chosen = items.filter { it.localId in selected }
                     val clipboard = LocalClipboard.current
@@ -313,7 +323,7 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
                         val next = items.getOrNull(i + 1)
                         fun grouped(a: MessageEntity?, b: MessageEntity?) = a != null && b != null && a.senderId == b.senderId && a.state != MsgState.SYSTEM && b.state != MsgState.SYSTEM && kotlin.math.abs(a.createdAt - b.createdAt) < 5 * 60_000
                         if (prev == null || !sameDay(prev.createdAt, m.createdAt)) DayDivider(m.createdAt)
-                        Box(Modifier.animateItem(fadeInSpec = Motion.tw(Motion.M), placementSpec = Motion.offsetSpring, fadeOutSpec = Motion.tw(Motion.L))) {
+                        Box(Modifier.animateItem(fadeInSpec = Motion.tw(Motion.M), placementSpec = androidx.compose.animation.core.spring(dampingRatio = 0.9f, stiffness = 380f, visibilityThreshold = androidx.compose.ui.unit.IntOffset.VisibilityThreshold), fadeOutSpec = Motion.tw(Motion.S))) {
                             MessageBubble(
                                 m, now,
                                 showAvatar = vm.scope == Scope.HALL,
@@ -466,7 +476,26 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
 }
 
 @Composable
-private fun ChatHeader(scope: String, peerName: String?, onBack: (() -> Unit)?, onInfo: (() -> Unit)?, count: Int, link: Link) {
+private fun OnlinePill(n: Int) {
+    val green = V.c.success
+    val inf = androidx.compose.animation.core.rememberInfiniteTransition(label = "live")
+    val pulse by inf.animateFloat(0.35f, 1f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1100), androidx.compose.animation.core.RepeatMode.Reverse), label = "p")
+    Row(
+        Modifier.clip(RoundedCornerShape(10.dp)).background(green.copy(alpha = 0.12f)).padding(horizontal = 7.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(6.dp).graphicsLayer { alpha = if (n > 0) pulse else 0.4f }.clip(CircleShape).background(green))
+        Spacer(Modifier.width(5.dp))
+        androidx.compose.animation.AnimatedContent(n, transitionSpec = {
+            (androidx.compose.animation.slideInVertically { if (targetState > initialState) it else -it } + fadeIn()) togetherWith (androidx.compose.animation.slideOutVertically { if (targetState > initialState) -it else it } + fadeOut())
+        }, label = "online") { v ->
+            Text("$v online", style = V.t.caption.copy(fontFamily = com.rajdeep.vesper.ui.theme.Mono), color = green)
+        }
+    }
+}
+
+@Composable
+private fun ChatHeader(scope: String, peerName: String?, onBack: (() -> Unit)?, onInfo: (() -> Unit)?, count: Int, link: Link, online: Int = 0) {
     Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         if (onBack != null) IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = V.c.text, onClick = onBack) else Spacer(Modifier.width(16.dp))
         if (scope == Scope.DIRECT) {
@@ -485,14 +514,12 @@ private fun ChatHeader(scope: String, peerName: String?, onBack: (() -> Unit)?, 
         } else {
             Column(Modifier.weight(1f).padding(start = 4.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    com.rajdeep.vesper.ui.components.HallMascot(30.dp)
+                    com.rajdeep.vesper.ui.components.HallMascot(34.dp)
                     Spacer(Modifier.width(10.dp))
                     Text("The Hall", style = V.t.title, color = V.c.text)
+                    Spacer(Modifier.width(10.dp))
+                    OnlinePill(online)
                 }
-                Text(
-                    if (link == Link.ONLINE) "Live · everyone on Vesper" else "Public space",
-                    style = V.t.label, color = V.c.text2, modifier = Modifier.padding(start = 17.dp),
-                )
             }
         }
     }

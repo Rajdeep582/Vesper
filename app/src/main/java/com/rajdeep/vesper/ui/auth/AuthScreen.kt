@@ -33,6 +33,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Visibility
@@ -174,8 +176,12 @@ private fun AuthContent(endReason: String?, vm: AuthViewModel) {
             drawCircle(Brush.radialGradient(listOf(accent.copy(alpha = 0.10f * glow), accent.copy(alpha = 0f)), center = Offset(size.width * 0.5f, size.height * 0.16f), radius = size.width * 0.9f))
         },
     ) {
+        val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+        val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
         Column(
-            Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
+            Modifier.fillMaxSize()
+                .pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus(); keyboard?.hide() }) }
+                .statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
         ) {
             Spacer(Modifier.height(48.dp))
             DuskGlyph(72.dp)
@@ -202,10 +208,13 @@ private fun AuthContent(endReason: String?, vm: AuthViewModel) {
             Spacer(Modifier.height(12.dp))
             VField(
                 s.password, vm::password, "Password", password = true,
-                helper = if (s.signUp) strength(s.password) else null,
+                helper = if (s.signUp && s.password.isEmpty()) "${Limits.PASSWORD_MIN}+ characters · mix letters, numbers & a symbol" else null,
                 ime = if (s.signUp) ImeAction.Next else ImeAction.Done,
                 onIme = if (s.signUp) null else ({ if (vm.canSubmit) vm.submit() }),
             )
+            Reveal(s.signUp && s.password.isNotEmpty(), enter = expandVertically(Motion.tw()) + fadeIn(), exit = shrinkVertically(Motion.tw()) + fadeOut()) {
+                StrengthMeter(s.password)
+            }
             Reveal(s.signUp, enter = expandVertically(Motion.tw()) + fadeIn(), exit = shrinkVertically(Motion.tw()) + fadeOut()) {
                 Column {
                     Spacer(Modifier.height(12.dp))
@@ -252,7 +261,40 @@ private fun Segmented(signUp: Boolean, onChange: (Boolean) -> Unit) {
     }
 }
 
+/** 0 = too short/weak (red), 1 = fair (amber), 2 = strong (green). */
+private fun score(p: String): Int {
+    if (p.length < Limits.PASSWORD_MIN) return 0
+    val kinds = listOf(p.any { it.isLowerCase() }, p.any { it.isUpperCase() }, p.any { it.isDigit() }, p.any { !it.isLetterOrDigit() }).count { it }
+    return when { p.length >= 14 && kinds >= 3 -> 2; p.length >= 12 || kinds >= 3 -> 1; else -> 0 }
+}
+
+@Composable
+private fun StrengthMeter(p: String) {
+    val sc = score(p)
+    val color by androidx.compose.animation.animateColorAsState(listOf(V.c.error, androidx.compose.ui.graphics.Color(0xFFE2B36B), V.c.success)[sc], label = "meter")
+    val fill by androidx.compose.animation.core.animateFloatAsState(((p.length.coerceAtMost(16)) / 16f * 0.6f + sc * 0.2f).coerceIn(0.08f, 1f), Motion.spring(), label = "fill")
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp, start = 4.dp, end = 4.dp)) {
+        Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).background(V.c.s2)) {
+            Box(Modifier.fillMaxWidth(fill).height(4.dp).clip(RoundedCornerShape(2.dp)).background(color))
+        }
+        Spacer(Modifier.height(6.dp))
+        Row {
+            Text(listOf("Weak", "Fair", "Strong")[sc], style = V.t.label, color = color)
+            Text("  ·  " + strength(p), style = V.t.label, color = V.c.text2)
+        }
+    }
+}
+
 private fun strength(p: String): String = when {
+    p.length < Limits.PASSWORD_MIN -> "${Limits.PASSWORD_MIN - p.length} more characters"
+    !p.any { it.isDigit() } -> "add a number"
+    p.all { it.isLetterOrDigit() } -> "add a symbol"
+    p.none { it.isUpperCase() } -> "try a capital letter"
+    p.length < 14 -> "longer is stronger"
+    else -> "great password"
+}
+
+private fun strengthOld(p: String): String = when {
     p.isEmpty() -> "At least ${Limits.PASSWORD_MIN} characters"
     p.length < Limits.PASSWORD_MIN -> "${Limits.PASSWORD_MIN - p.length} more characters"
     p.length >= 16 && p.any { it.isDigit() } && p.any { !it.isLetterOrDigit() } -> "Strong"

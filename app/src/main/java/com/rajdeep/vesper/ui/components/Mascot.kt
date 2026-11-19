@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.rajdeep.vesper.ui.theme.V
@@ -40,6 +41,8 @@ fun HallMascot(size: Dp = 30.dp, modifier: Modifier = Modifier) {
     val lookX = remember { Animatable(0f) }
     val lookY = remember { Animatable(0f) }
     val blink = remember { Animatable(1f) }
+    val wow = remember { Animatable(1f) }   // eyes widen in surprise now and then
+    val tilt = remember { Animatable(0f) }  // curious head tilt
     LaunchedEffect(Unit) {
         while (true) {
             delay(Random.nextLong(900, 2600))
@@ -58,19 +61,29 @@ fun HallMascot(size: Dp = 30.dp, modifier: Modifier = Modifier) {
             if (Random.nextFloat() < 0.25f) { delay(140); blink.animateTo(0.08f, tween(70)); blink.animateTo(1f, tween(110)) }
         }
     }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(Random.nextLong(6000, 11000))
+            when (Random.nextInt(2)) {
+                0 -> { wow.animateTo(1.45f, spring(dampingRatio = 0.35f, stiffness = 500f)); delay(650); wow.animateTo(1f, spring(dampingRatio = 0.7f, stiffness = 220f)) }
+                else -> { tilt.animateTo(if (Random.nextBoolean()) 12f else -12f, spring(dampingRatio = 0.5f, stiffness = 180f)); delay(900); tilt.animateTo(0f, spring(dampingRatio = 0.6f, stiffness = 160f)) }
+            }
+        }
+    }
     val inf = rememberInfiniteTransition(label = "mascot")
     val sway by inf.animateFloat(-1f, 1f, infiniteRepeatable(tween(1600), RepeatMode.Reverse), label = "sway")
     val breathe by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(2200), RepeatMode.Reverse), label = "breathe")
 
     Canvas(modifier.size(size)) {
         val w = this.size.width; val h = this.size.height
-        val headW = w * 0.84f; val headH = h * 0.62f * (1f + 0.025f * breathe)
-        val left = (w - headW) / 2f; val top = h - headH - h * 0.04f
+        rotate(tilt.value, Offset(w / 2f, h * 0.75f)) {
+        val headW = w * 0.80f; val headH = h * 0.54f * (1f + 0.025f * breathe)
+        val left = (w - headW) / 2f; val top = h - headH - h * 0.06f
         val stroke = w * 0.06f
         // antennae
         listOf(-1f, 1f).forEach { side ->
             val base = Offset(w / 2f + side * headW * 0.22f, top + stroke)
-            val tip = Offset(base.x + side * w * 0.10f + sway * w * 0.05f, top - h * 0.22f)
+            val tip = Offset(base.x + side * w * 0.09f + sway * w * 0.04f, (top - h * 0.20f).coerceAtLeast(w * 0.09f))
             drawLine(dark, base, tip, stroke, StrokeCap.Round)
             drawCircle(body, w * 0.075f, tip)
         }
@@ -80,7 +93,7 @@ fun HallMascot(size: Dp = 30.dp, modifier: Modifier = Modifier) {
             Offset(left, top), Size(headW, headH), CornerRadius(headH * 0.45f),
         )
         // eyes
-        val eyeR = headW * 0.15f
+        val eyeR = headW * 0.15f * wow.value
         val eyeY = top + headH * 0.48f
         listOf(-1f, 1f).forEach { side ->
             val c = Offset(w / 2f + side * headW * 0.21f, eyeY)
@@ -94,5 +107,6 @@ fun HallMascot(size: Dp = 30.dp, modifier: Modifier = Modifier) {
         }
         // tiny smile
         drawArc(dark, 20f, 140f, false, Offset(w / 2f - headW * 0.09f, top + headH * 0.66f), Size(headW * 0.18f, headH * 0.14f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke * 0.7f, cap = StrokeCap.Round))
+        }
     }
 }

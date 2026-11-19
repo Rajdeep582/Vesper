@@ -187,6 +187,7 @@ private fun Route.authRoutes(s: Services) {
 private fun Route.memberRoutes(s: Services) {
     post("/auth/signout") { s.accounts.signOut(call.caller()); call.respond(Ok()) }
     get("/me") { call.respond(s.accounts.me(call.caller())) }
+    get("/online") { call.caller(); call.respond(com.rajdeep.vesper.shared.OnlineCount(s.hub.onlineCount())) }
     get("/me/devices") { call.respond(s.admin.devices(call.caller())) }
     post("/me/devices/{d}/signout") {
         val c = call.caller()

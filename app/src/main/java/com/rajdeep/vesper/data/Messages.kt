@@ -157,6 +157,7 @@ class Messages @Inject constructor(
     /** Remove messages from this phone only (others keep theirs until expiry). */
     suspend fun deleteLocal(ids: List<String>) {
         val rows = ids.mapNotNull { dao.get(it) }
+        rows.filter { it.scope == Scope.HALL }.mapNotNull { it.serverId }.forEach { db.kv().put(com.rajdeep.vesper.core.db.KvEntity("hid:$it", "1")) }
         rows.forEach { media.purgeStaged(it.stagedBlob) }
         backup.forget(rows.filter { it.scope == Scope.DIRECT }.mapNotNull { it.serverId })
         dao.delete(ids)
@@ -173,6 +174,8 @@ class Messages @Inject constructor(
         media.purge(rows.mapNotNull { r -> r.mediaJson?.let { VesperJson.decodeFromString(MediaRef.serializer(), it).mediaId.ifEmpty { null } } })
         dao.delete(rows.map { it.localId })
     }
+
+    suspend fun onlineCount(): Int = api.get("/v1/online", com.rajdeep.vesper.shared.OnlineCount.serializer()).count
 
     fun flushAsync() { scope.launch { flush() } }
 
@@ -355,6 +358,8 @@ class Messages @Inject constructor(
 
     private suspend fun storeHall(m: HallMessageDto, live: Boolean) {
         val s = session.current() ?: return
+        // "Delete for me" in the Hall: never re-download it on later syncs.
+        if (db.kv().get("hid:${m.id}") != null) return
         db.users().upsert(listOf(UserEntity(m.senderId, m.senderName, 0)).filter { db.users().get(it.id) == null })
         val own = m.senderId == s.userId && m.cmid != null && dao.get(m.cmid!!) != null
         if (own) {
