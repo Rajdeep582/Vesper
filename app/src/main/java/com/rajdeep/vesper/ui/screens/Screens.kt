@@ -185,16 +185,28 @@ class PeopleViewModel @Inject constructor(private val repo: PeopleRepository, pr
     val me get() = session.current()?.userId
     private var job: kotlinx.coroutines.Job? = null
 
-    init { search("") }
+    init { if (cached != null) results.value = cached; search("") }
 
+    /** Debounced search; shows the last list instantly and quietly retries (with backoff) instead of erroring. */
     fun search(q: String) {
         query.value = q
         job?.cancel()
         job = viewModelScope.launch {
             delay(if (q.isEmpty()) 0 else 250)
-            runCatching { repo.search(q) }.onSuccess { results.value = it.items; error.value = null }.onFailure { error.value = (it as? ApiException)?.message ?: "Couldn't load people" }
+            var wait = 1_000L
+            while (true) {
+                val r = runCatching { repo.search(q) }
+                if (r.isSuccess) {
+                    results.value = r.getOrThrow().items; error.value = null
+                    if (q.isEmpty()) cached = results.value
+                    break
+                }
+                delay(wait); wait = (wait * 2).coerceAtMost(15_000)
+            }
         }
     }
+
+    companion object { @Volatile private var cached: List<UserSummary>? = null }
 }
 
 @Composable
@@ -217,7 +229,6 @@ fun PeopleScreen(onProfile: (String) -> Unit, vm: PeopleViewModel = hiltViewMode
             }
         }
         when {
-            err != null && res == null -> EmptyState("Can't reach Vesper", err!!)
             res == null -> SkeletonRows()
             res!!.isEmpty() -> EmptyState("No one by that name", "Usernames use a–z, 0–9, _ and .")
             else -> LazyColumn(Modifier.fillMaxSize().springOverscroll(), overscrollEffect = null) {

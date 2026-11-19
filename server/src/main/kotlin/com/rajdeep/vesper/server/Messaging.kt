@@ -27,9 +27,16 @@ import com.rajdeep.vesper.shared.Nacks
 import com.rajdeep.vesper.shared.PendingEnvelopes
 import com.rajdeep.vesper.shared.VesperJson
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import org.bson.Document
 
 private val CMID = Regex("^[A-Za-z0-9-]{8,64}$")
+
+/** Bookkeeping that must not delay the sender's ack (activity log, conversation index, push). */
+private val after = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+private fun later(block: suspend () -> Unit) {
+    after.launch { runCatching { block() }.onFailure { org.slf4j.LoggerFactory.getLogger("after").warn("background step failed: {}", it.message) } }
+}
 
 class Hall(
     private val db: Db,
@@ -92,7 +99,7 @@ class Hall(
         if (mediaId != null) media.attach(mediaId, id, exp)
         val username = user.str("u")!!
         hub.toAll(HallMsg(HallMessageDto(id, seq, c.uid, username, f.kind, f.body, now, exp, f.cmid)))
-        activity.record("hall", c.uid, username, kind = f.kind)
+        later { activity.record("hall", c.uid, username, kind = f.kind) }
         return Ack(f.cmid, id, now, exp, seq)
     }
 
@@ -147,18 +154,22 @@ class Direct(
             return Ack(f.cmid, d.str("_id")!!, d.millis("at")!!, d.millis("exp")!!)
         }
         if (f.toUserId == c.uid) return Nack(f.cmid, Nacks.INVALID, "Can't message yourself")
-        val me = db.users.one(Document("_id", c.uid))
+        // One round trip for both accounts.
+        val both = db.users.find(Filters.`in`("_id", listOf(c.uid, f.toUserId))).projection(Document("st", 1).append("u", 1)).toList().associateBy { it.str("_id") }
+        val me = both[c.uid]
         if (me == null || me.str("st") == "suspended") return Nack(f.cmid, Nacks.INVALID, "Account suspended")
-        val peer = db.users.one(Document("_id", f.toUserId)) ?: return Nack(f.cmid, Nacks.UNKNOWN_USER, "This person no longer exists")
+        val peer = both[f.toUserId] ?: return Nack(f.cmid, Nacks.UNKNOWN_USER, "This person no longer exists")
         if (peer.str("st") == "suspended") return Nack(f.cmid, Nacks.UNKNOWN_USER, "This person is unavailable")
         if (!limiter.allow(c.uid, now)) return Nack(f.cmid, Nacks.RATE, "Slow down a little")
         if (f.envelopes.any { it.body.length > Limits.MAX_BODY_BYTES * 2 }) return Nack(f.cmid, Nacks.INVALID, "Message too large")
         if ((f.kind == MessageKind.TEXT) != (f.mediaId == null)) return Nack(f.cmid, Nacks.INVALID, "Kind/media mismatch")
 
         // Device-set check: every device of the recipient and every *other* device of the sender.
+        val devs = db.devices.find(Filters.`in`("uid", listOf(c.uid, f.toUserId))).projection(Document("uid", 1).append("d", 1)).toList()
+            .groupBy({ it.str("uid")!! }, { it.int("d")!! })
         val expected = mapOf(
-            f.toUserId to accounts.deviceIds(f.toUserId).toSet(),
-            c.uid to (accounts.deviceIds(c.uid).toSet() - c.did),
+            f.toUserId to (devs[f.toUserId] ?: emptyList()).toSet(),
+            c.uid to ((devs[c.uid] ?: emptyList()).toSet() - c.did),
         )
         val provided = f.envelopes.groupBy { it.toUserId }.mapValues { (_, v) -> v.map { it.deviceId }.toSet() }
         if (provided.keys.any { it !in expected.keys }) return Nack(f.cmid, Nacks.INVALID, "Unexpected recipient")
@@ -195,19 +206,19 @@ class Direct(
         }
         db.envelopes.insertMany(envDocs)
         if (f.mediaId != null) media.attach(f.mediaId!!, mid, exp)
-        val (a, b) = pair.split(":")
-        db.conversations.updateOne(
-            Document("_id", pair),
-            Updates.combine(Updates.setOnInsert("a", a), Updates.setOnInsert("b", b), Updates.setOnInsert("first", now.asDate()), Updates.set("last", now.asDate())),
-            UpdateOptions().upsert(true),
-        )
-        envDocs.forEach { d ->
-            val dto = envToDto(d)
-            hub.toDevice(d.str("toUid")!!, d.int("toD")!!, DirectEnv(dto))
+        // Stored durably → deliver live and ack right away; the rest happens off the hot path.
+        envDocs.forEach { d -> hub.toDevice(d.str("toUid")!!, d.int("toD")!!, DirectEnv(envToDto(d))) }
+        val toName = peer.str("u"); val fromName = me.str("u")
+        later {
+            val (a, b) = pair.split(":")
+            db.conversations.updateOne(
+                Document("_id", pair),
+                Updates.combine(Updates.setOnInsert("a", a), Updates.setOnInsert("b", b), Updates.setOnInsert("first", now.asDate()), Updates.set("last", now.asDate())),
+                UpdateOptions().upsert(true),
+            )
+            if (!hub.isOnline(f.toUserId)) push.wake(f.toUserId)
+            activity.record("direct", c.uid, fromName, f.toUserId, toName, f.kind)
         }
-        if (!hub.isOnline(f.toUserId)) push.wake(f.toUserId)
-        val nameMap = names.resolve(setOf(c.uid, f.toUserId))
-        activity.record("direct", c.uid, nameMap[c.uid], f.toUserId, nameMap[f.toUserId], f.kind)
         return Ack(f.cmid, mid, now, exp)
     }
 
@@ -252,10 +263,11 @@ class Direct(
         if (docs.isEmpty()) return
         db.envelopes.deleteMany(Filters.`in`("_id", docs.map { it.str("_id") }))
         // Delivered = reached any device of the recipient (not the sender's own other devices).
-        docs.filter { it.str("fromUid") != c.uid }.map { it.str("mid")!! to it.str("fromUid")!! }.distinct().forEach { (mid, from) ->
-            val res = db.privateMeta.updateOne(Filters.and(Filters.eq("_id", mid), Filters.exists("del", false)), Updates.set("del", ServerClock.now().asDate()))
-            if (res.modifiedCount > 0) hub.toUser(from, DirectDelivered(mid, c.uid))
-        }
+        val fromPeers = docs.filter { it.str("fromUid") != c.uid }.map { it.str("mid")!! to it.str("fromUid")!! }.distinct()
+        if (fromPeers.isEmpty()) return
+        // Notify first (receipts feel instant), persist in one write.
+        fromPeers.forEach { (mid, from) -> hub.toUser(from, DirectDelivered(mid, c.uid)) }
+        db.privateMeta.updateMany(Filters.and(Filters.`in`("_id", fromPeers.map { it.first }), Filters.exists("del", false)), Updates.set("del", ServerClock.now().asDate()))
     }
 }
 

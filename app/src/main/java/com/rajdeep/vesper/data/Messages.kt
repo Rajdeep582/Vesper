@@ -53,6 +53,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -217,6 +218,7 @@ class Messages @Inject constructor(
             }
             val reply = rt.request(m.localId, DirectSend(m.localId, peer, kind, body.media?.mediaId, envelopes)) ?: return false
             if (reply is Nack && reply.code == Nacks.DEVICES) {
+                deviceCache.remove(peer); deviceCache.remove(s.userId)
                 // Device list changed: drop sessions for removed devices; missing ones get fresh bundles next round.
                 reply.mismatch?.extra?.forEach { (u, ds) -> ds.forEach { cipher.deleteSession(u, it) } }
                 return@repeat
@@ -226,11 +228,24 @@ class Messages @Inject constructor(
         return false
     }
 
+    /** Device lists per user, cached briefly; a DEVICES nack from the server invalidates them. Saves 2 round trips per message. */
+    private val deviceCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<Int>>>()
+    private suspend fun devicesOf(uid: String): List<Int> {
+        deviceCache[uid]?.let { (at, ids) -> if (System.currentTimeMillis() - at < 10 * 60_000) return ids }
+        val ids = api.get("/v1/keys/$uid/devices", DeviceList.serializer()).deviceIds
+        deviceCache[uid] = System.currentTimeMillis() to ids
+        return ids
+    }
+
     /** Encrypts [payload] for every device of [peer] and every other device of mine. */
     private suspend fun encryptForAll(peer: String, payload: ByteArray): List<OutEnvelope> = withContext(Dispatchers.IO) {
         val s = me()
-        val peerDevices = api.get("/v1/keys/$peer/devices", DeviceList.serializer()).deviceIds
-        val myDevices = api.get("/v1/keys/${s.userId}/devices", DeviceList.serializer()).deviceIds.filter { it != s.deviceId }
+        val (peerDevicesAll, myDevicesAll) = kotlinx.coroutines.coroutineScope {
+            val a = async { devicesOf(peer) }; val b = async { devicesOf(s.userId) }
+            a.await() to b.await()
+        }
+        val peerDevices = peerDevicesAll
+        val myDevices = myDevicesAll.filter { it != s.deviceId }
         val targets = peerDevices.map { peer to it } + myDevices.map { s.userId to it }
         // Forget sessions for devices that no longer exist.
         listOf(peer to peerDevices, s.userId to myDevices).forEach { (u, live) ->
@@ -253,10 +268,12 @@ class Messages @Inject constructor(
 
     private suspend fun onConnected() {
         if (session.current() == null) return
-        runCatching { syncHall() }
-        runCatching { syncDirect() }
-        runCatching { syncReceipts() }
-        flush()
+        // Outgoing first (the user is waiting on those), catch-up syncs in parallel.
+        kotlinx.coroutines.coroutineScope {
+            launch { flush() }
+            launch { runCatching { syncHall() } }
+            launch { runCatching { syncDirect() }; runCatching { syncReceipts() } }
+        }
         runCatching { maintainPreKeys() }
     }
 

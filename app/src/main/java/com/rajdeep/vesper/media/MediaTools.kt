@@ -53,7 +53,8 @@ object ImageCompressor {
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             decoder.isMutableRequired = false
         }
-        var quality = 76
+        // WhatsApp-standard feel: ≤1600 px, WebP q≈74 (typ. 150–400 KB); step down gently, never below 58 (keeps detail).
+        var quality = 74
         var out: ByteArray
         do {
             val bos = ByteArrayOutputStream()
@@ -61,8 +62,8 @@ object ImageCompressor {
             val fmt = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP
             bmp.compress(fmt, quality, bos)
             out = bos.toByteArray()
-            quality -= 12
-        } while (out.size > 1_500_000 && quality > 30)
+            quality -= 8
+        } while (out.size > 450_000 && quality >= 58)
         val hash = BlurHash.encode(Bitmap.createScaledBitmap(bmp, 32, (32f * bmp.height / bmp.width).roundToInt().coerceIn(1, 64), true), 4, 3)
         PreparedImage(out, bmp.width, bmp.height, hash, "image/webp")
     }
@@ -157,12 +158,13 @@ class VoiceRecorder @Inject constructor(@ApplicationContext private val ctx: Con
         val f = File(dir, UUID.randomUUID().toString() + ".ogg")
         val r = if (Build.VERSION.SDK_INT >= 31) MediaRecorder(ctx) else @Suppress("DEPRECATION") MediaRecorder()
         return runCatching {
-            r.setAudioSource(MediaRecorder.AudioSource.MIC)
+            // VOICE_COMMUNICATION enables the platform's noise suppression / echo cancel / AGC for clearer speech.
+            r.setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
             r.setOutputFormat(MediaRecorder.OutputFormat.OGG)
             r.setAudioEncoder(MediaRecorder.AudioEncoder.OPUS)
             r.setAudioChannels(1)
             r.setAudioSamplingRate(48_000)
-            r.setAudioEncodingBitRate(24_000)
+            r.setAudioEncodingBitRate(20_000) // Opus 20 kbps mono: clear speech at ~150 KB/min
             r.setMaxDuration(maxMs.toInt())
             r.setOnInfoListener { _, what, _ -> if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED) onMaxReached() }
             r.setOutputFile(f.absolutePath)
