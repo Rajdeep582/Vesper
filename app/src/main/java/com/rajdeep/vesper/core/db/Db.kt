@@ -196,6 +196,7 @@ interface UserDao {
     @Upsert suspend fun upsert(users: List<UserEntity>)
     @Query("SELECT * FROM users WHERE id = :id") suspend fun get(id: String): UserEntity?
     @Query("SELECT * FROM users WHERE id = :id") fun observe(id: String): Flow<UserEntity?>
+    @Query("SELECT * FROM users") fun all(): Flow<List<UserEntity>>
 }
 
 @Dao
@@ -204,6 +205,8 @@ interface KvDao {
     @Query("SELECT value FROM kv WHERE `key` = :k") fun observe(k: String): Flow<String?>
     @Upsert suspend fun put(e: KvEntity)
     @Query("DELETE FROM kv WHERE `key` = :k") suspend fun remove(k: String)
+    /** People this user has talked to privately (key contact:<id>, value = last activity ms). Survives message expiry. */
+    @Query("SELECT * FROM kv WHERE `key` LIKE 'contact:%'") fun contacts(): Flow<List<KvEntity>>
 }
 
 @Dao

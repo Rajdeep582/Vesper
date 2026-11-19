@@ -236,6 +236,7 @@ private fun Route.memberRoutes(s: Services) {
     get("/backup/items") { call.respond(s.backups.list(call.caller().uid)) }
     put("/backup/items") { s.backups.put(call.caller().uid, call.receive<BackupItems>().items); call.respond(Ok()) }
     post("/backup/delete") { s.backups.delete(call.caller().uid, call.receive<BackupIds>().ids); call.respond(Ok()) }
+    get("/direct/contacts") { call.respond(s.direct.contacts(call.caller())) }
     post("/direct/unsend") { s.direct.unsend(call.caller(), call.receive<BackupIds>().ids); call.respond(Ok()) }
     /** Hall delete for everyone: your own messages, or any message if you are the admin. */
     post("/hall/delete") {

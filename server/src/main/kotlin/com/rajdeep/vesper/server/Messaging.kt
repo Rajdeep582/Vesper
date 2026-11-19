@@ -239,6 +239,15 @@ class Direct(
         return PendingEnvelopes(docs.map(::envToDto), now)
     }
 
+    /** Everyone this user has ever messaged with (from the conversation index; no content). Newest first. */
+    suspend fun contacts(c: Caller): com.rajdeep.vesper.shared.UserPage {
+        val convs = db.conversations.find(Filters.or(Filters.eq("a", c.uid), Filters.eq("b", c.uid))).sort(Sorts.descending("last")).limit(500).toList()
+        val peers = convs.map { if (it.str("a") == c.uid) it.str("b")!! else it.str("a")!! }
+        if (peers.isEmpty()) return com.rajdeep.vesper.shared.UserPage(emptyList())
+        val users = db.users.find(Filters.and(Filters.`in`("_id", peers), Filters.ne("st", "suspended"))).toList().associateBy { it.str("_id") }
+        return com.rajdeep.vesper.shared.UserPage(peers.mapNotNull { id -> users[id]?.let { com.rajdeep.vesper.shared.UserSummary(id, it.str("u")!!, it.millis("at") ?: 0) } })
+    }
+
     /** Delete for everyone: only the sender's own messages. Removes metadata, undelivered envelopes, media and backups. */
     suspend fun unsend(c: Caller, mids: List<String>) {
         val docs = db.privateMeta.find(Filters.and(Filters.`in`("_id", mids.take(500)), Filters.eq("fromUid", c.uid))).toList()

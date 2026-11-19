@@ -19,6 +19,10 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.layout.ime
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.border
 import androidx.compose.ui.semantics.semantics
@@ -340,6 +344,15 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
                         }
                     }
                 }
+                // Keyboard opening shrinks the list: if the newest message was in view just before, keep it pinned above the composer.
+                LaunchedEffect(listState) {
+                    var lastH = 0; var wasBottom = true
+                    androidx.compose.runtime.snapshotFlow { listState.layoutInfo.viewportSize.height to !listState.canScrollForward }.collect { (h, bottom) ->
+                        val shrunk = lastH != 0 && h < lastH
+                        if (shrunk && wasBottom) listState.scrollBy((lastH - h).toFloat()) else wasBottom = bottom
+                        lastH = h
+                    }
+                }
                 val showJump by remember { derivedStateOf { listState.canScrollForward && (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) < items.size - 6 } }
                 Reveal(showJump, modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp), enter = scaleIn(Motion.bouncy()) + fadeIn(), exit = scaleOut() + fadeOut()) {
                     Box(Modifier.size(42.dp).clip(CircleShape).background(V.c.s3).pressable { scope.launch { listState.animateScrollToItem(items.size - 1) } }, contentAlignment = Alignment.Center) {
@@ -481,15 +494,15 @@ private fun OnlinePill(n: Int) {
     val inf = androidx.compose.animation.core.rememberInfiniteTransition(label = "live")
     val pulse by inf.animateFloat(0.35f, 1f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1100), androidx.compose.animation.core.RepeatMode.Reverse), label = "p")
     Row(
-        Modifier.clip(RoundedCornerShape(10.dp)).background(green.copy(alpha = 0.12f)).padding(horizontal = 7.dp, vertical = 3.dp),
+        Modifier.clip(RoundedCornerShape(9.dp)).background(green.copy(alpha = 0.12f)).padding(horizontal = 6.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(6.dp).graphicsLayer { alpha = if (n > 0) pulse else 0.4f }.clip(CircleShape).background(green))
-        Spacer(Modifier.width(5.dp))
+        Box(Modifier.size(5.dp).graphicsLayer { alpha = if (n > 0) pulse else 0.4f }.clip(CircleShape).background(green))
+        Spacer(Modifier.width(4.dp))
         androidx.compose.animation.AnimatedContent(n, transitionSpec = {
             (androidx.compose.animation.slideInVertically { if (targetState > initialState) it else -it } + fadeIn()) togetherWith (androidx.compose.animation.slideOutVertically { if (targetState > initialState) -it else it } + fadeOut())
         }, label = "online") { v ->
-            Text("$v online", style = V.t.caption.copy(fontFamily = com.rajdeep.vesper.ui.theme.Mono), color = green)
+            Text("$v online", style = V.t.caption.copy(fontFamily = com.rajdeep.vesper.ui.theme.Mono, fontSize = 9.5.sp, letterSpacing = 0.2.sp), color = green)
         }
     }
 }
@@ -514,7 +527,7 @@ private fun ChatHeader(scope: String, peerName: String?, onBack: (() -> Unit)?, 
         } else {
             Column(Modifier.weight(1f).padding(start = 4.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    com.rajdeep.vesper.ui.components.HallMascot(34.dp)
+                    com.rajdeep.vesper.ui.components.HallMascot(34.dp, Modifier.offset(y = (-4).dp))
                     Spacer(Modifier.width(10.dp))
                     Text("The Hall", style = V.t.title, color = V.c.text)
                     Spacer(Modifier.width(10.dp))

@@ -108,6 +108,30 @@ class Messages @Inject constructor(
     fun direct(peer: String): Flow<List<MessageEntity>> = dao.direct(peer)
     fun conversations() = dao.conversations()
     fun unreadDirect() = dao.unreadDirect()
+
+    private suspend fun rememberContact(peer: String, at: Long) {
+        val cur = db.kv().get("contact:$peer")?.toLongOrNull() ?: 0L
+        if (at > cur) db.kv().put(com.rajdeep.vesper.core.db.KvEntity("contact:$peer", at.toString()))
+    }
+
+    /** Direct list: live conversations first, then everyone talked to before (their messages may have expired). */
+    fun directList(): kotlinx.coroutines.flow.Flow<List<com.rajdeep.vesper.core.db.ConversationRow>> =
+        kotlinx.coroutines.flow.combine(dao.conversations(), db.kv().contacts(), db.users().all()) { convs, contacts, users ->
+            val have = convs.map { it.peerId }.toSet()
+            val names = users.associate { it.id to it.username }
+            val me = session.current()?.userId
+            convs + contacts.map { it.key.removePrefix("contact:") to (it.value.toLongOrNull() ?: 0L) }
+                .filter { (id, _) -> id !in have && id != me }
+                .sortedByDescending { it.second }
+                .map { (id, at) -> com.rajdeep.vesper.core.db.ConversationRow(id, names[id], "", null, at, false, 0, 0) }
+        }
+
+    /** Pull the server's list of past private contacts (restores the Direct list after reinstall). */
+    suspend fun syncContacts() {
+        val page = api.get("/v1/direct/contacts", com.rajdeep.vesper.shared.UserPage.serializer())
+        db.users().upsert(page.items.map { UserEntity(it.id, it.username, it.joinedAt) })
+        page.items.forEachIndexed { i, u -> rememberContact(u.id, 1L + page.items.size - i) }
+    }
     suspend fun markRead(peer: String) {
         val sids = dao.unreadServerIds(peer)
         dao.markRead(peer)
@@ -139,6 +163,7 @@ class Messages @Inject constructor(
 
     private suspend fun insertOutgoing(scope: String, peer: String?, kind: MessageKind, text: String?, ref: MediaRef?, staged: String?) {
         val s = me()
+        if (scope == Scope.DIRECT && peer != null) rememberContact(peer, session.now())
         dao.upsert(
             MessageEntity(
                 localId = newCmid(), scope = scope, peerId = peer, senderId = s.userId, senderName = s.username,
@@ -297,6 +322,7 @@ class Messages @Inject constructor(
             launch { flush() }
             launch { runCatching { syncHall() } }
             launch { runCatching { syncDirect() }; runCatching { syncReceipts() } }
+            launch { runCatching { syncContacts() } }
         }
         runCatching { maintainPreKeys() }
     }
@@ -407,7 +433,7 @@ class Messages @Inject constructor(
                 read = outgoing || notifier.isViewing(peer),
             ),
         )
-        if (inserted != -1L) dao.get("d:${e.mid}")?.let(backup::save)
+        if (inserted != -1L) { dao.get("d:${e.mid}")?.let(backup::save); rememberContact(peer, e.acceptedAt) }
         if (inserted != -1L && !outgoing) {
             if (live) _events.tryEmit(ChatEvent.Incoming(Scope.DIRECT, peer))
             notifier.direct(peer, name, p.kind, p.body.text, e.mid, e.expiresAt)

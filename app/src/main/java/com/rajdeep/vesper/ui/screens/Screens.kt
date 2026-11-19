@@ -112,7 +112,7 @@ import javax.inject.Inject
 
 @HiltViewModel
 class DirectListViewModel @Inject constructor(messages: Messages) : ViewModel() {
-    val rows = messages.conversations().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val rows = messages.directList().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 }
 
 @Composable
@@ -123,12 +123,11 @@ fun DirectListScreen(onOpen: (String) -> Unit, onFindPeople: () -> Unit, vm: Dir
         when {
             rows == null -> SkeletonRows()
             rows!!.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                EmptyState(
-                    "No private conversations yet",
-                    "Open someone's profile from People or the Hall and choose Message privately.",
-                    glyph = { Icon(Icons.Rounded.Lock, null, tint = V.accent, modifier = Modifier.size(40.dp)) },
-                    action = { GhostButton("Find people", color = V.accent, onClick = onFindPeople) },
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Rounded.Lock, null, tint = V.accent, modifier = Modifier.size(40.dp))
+                    Spacer(Modifier.height(18.dp))
+                    GhostButton("Find people", color = V.accent, onClick = onFindPeople)
+                }
             }
             else -> LazyColumn(Modifier.fillMaxSize().springOverscroll(), overscrollEffect = null) {
                 items(rows!!, key = { it.peerId }) { r ->
@@ -145,14 +144,18 @@ private fun ConversationItem(r: ConversationRow, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(r.peerName ?: "…", style = V.t.subhead, color = V.c.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(if (sameDay(r.lastAt, System.currentTimeMillis())) clock(r.lastAt) else dayLabel(r.lastAt), style = V.t.mono, color = if (r.unread > 0) V.accent else V.c.text3)
+                if (r.lastKind.isNotEmpty()) Text(if (sameDay(r.lastAt, System.currentTimeMillis())) clock(r.lastAt) else dayLabel(r.lastAt), style = V.t.mono, color = if (r.unread > 0) V.accent else V.c.text3)
             }
             Spacer(Modifier.height(3.dp))
+            if (r.lastKind.isEmpty()) {
+                Text("Tap to message", style = V.t.bodySmall, color = V.c.text3, maxLines = 1)
+                return@Column
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (r.lastOutgoing) {
                     Icon(
-                        when (r.lastState) { MsgState.PENDING -> Icons.Rounded.Schedule; MsgState.DELIVERED -> Icons.Rounded.DoneAll; MsgState.FAILED -> Icons.Rounded.ErrorOutline; else -> Icons.Rounded.Done },
-                        null, tint = when (r.lastState) { MsgState.DELIVERED -> V.accent; MsgState.FAILED -> V.c.error; else -> V.c.text3 }, modifier = Modifier.size(14.dp),
+                        when (r.lastState) { MsgState.PENDING -> Icons.Rounded.Schedule; MsgState.DELIVERED, MsgState.READ -> Icons.Rounded.DoneAll; MsgState.FAILED -> Icons.Rounded.ErrorOutline; else -> Icons.Rounded.Done },
+                        null, tint = when (r.lastState) { MsgState.READ -> com.rajdeep.vesper.ui.chat.SeenBlue; MsgState.FAILED -> V.c.error; else -> V.c.text3 }, modifier = Modifier.size(14.dp),
                     )
                     Spacer(Modifier.width(4.dp))
                 }
