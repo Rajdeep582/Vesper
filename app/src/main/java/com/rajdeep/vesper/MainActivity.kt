@@ -17,6 +17,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.core.animateDp
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
@@ -24,6 +25,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -185,23 +187,24 @@ class MainActivity : ComponentActivity() {
             // Full-width slides with opaque pages: the leaving page never shows through the arriving one.
             enterTransition = { slideInHorizontally(androidx.compose.animation.core.tween(320, easing = androidx.compose.animation.core.FastOutSlowInEasing)) { it } },
             exitTransition = { slideOutHorizontally(androidx.compose.animation.core.tween(320, easing = androidx.compose.animation.core.FastOutSlowInEasing)) { -it / 4 } + fadeOut(androidx.compose.animation.core.tween(320), targetAlpha = 0.6f) },
-            popEnterTransition = { slideInHorizontally(androidx.compose.animation.core.tween(320, easing = androidx.compose.animation.core.FastOutSlowInEasing)) { -it / 4 } + fadeIn(androidx.compose.animation.core.tween(320), initialAlpha = 0.6f) },
-            popExitTransition = { slideOutHorizontally(androidx.compose.animation.core.tween(320, easing = androidx.compose.animation.core.FastOutSlowInEasing)) { it } },
+            // Back (incl. predictive back-and-hold): leaving page shrinks, drifts right and fades away; previous page settles in.
+            popEnterTransition = { fadeIn(androidx.compose.animation.core.tween(300), initialAlpha = 0.85f) + slideInHorizontally(androidx.compose.animation.core.tween(300)) { -it / 12 } },
+            popExitTransition = { fadeOut(androidx.compose.animation.core.tween(300, easing = { (it * 1.8f).coerceAtMost(1f) })) + scaleOut(androidx.compose.animation.core.tween(300), targetScale = 0.86f) + slideOutHorizontally(androidx.compose.animation.core.tween(300)) { it / 4 } },
         ) {
-            composable<HomeRoute> { Page { Home(nav, isAdmin) } }
-            composable<DirectChatRoute> { Page {
+            composable<HomeRoute> { Page(this) { Home(nav, isAdmin) } }
+            composable<DirectChatRoute> { Page(this) {
                 val r = it.arguments?.getString("peer") ?: ""
                 CompositionLocalProvider(LocalSpace provides Space.DIRECT) {
                     ChatScreen(onBack = { nav.popBackStack() }, onOpenInfo = { nav.navigate(ChatInfoRoute(r)) }, onOpenProfile = { id -> nav.navigate(ProfileRoute(id)) })
                 }
             } }
-            composable<ChatInfoRoute> { Page {
+            composable<ChatInfoRoute> { Page(this) {
                 CompositionLocalProvider(LocalSpace provides Space.DIRECT) { ChatInfoScreen(onBack = { nav.popBackStack() }, onProfile = { id -> nav.navigate(ProfileRoute(id)) }) }
             } }
-            composable<ProfileRoute> { Page {
+            composable<ProfileRoute> { Page(this) {
                 ProfileScreen(onBack = { nav.popBackStack() }, onMessage = { id -> nav.navigate(DirectChatRoute(id)) })
             } }
-            composable<MemberRoute> { Page {
+            composable<MemberRoute> { Page(this) {
                 CompositionLocalProvider(LocalSpace provides Space.CONSOLE) { MemberScreen(onBack = { nav.popBackStack() }) }
             } }
         }
@@ -279,9 +282,13 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Page(content: @Composable () -> Unit) {
-        // Opaque, full-size page so transitions never reveal the page underneath.
-        Box(Modifier.fillMaxSize().background(V.c.bg)) { content() }
+    private fun Page(scope: androidx.compose.animation.AnimatedVisibilityScope, content: @Composable () -> Unit) {
+        // Opaque page. While it is leaving (back / predictive back-and-hold) it becomes a rounded card that shrinks and fades.
+        val corner by scope.transition.animateDp(label = "corner") { if (it == androidx.compose.animation.EnterExitState.PostExit) 32.dp else 0.dp }
+        Box(
+            Modifier.fillMaxSize().clip(RoundedCornerShape(corner)).background(V.c.bg)
+                .then(if (corner > 0.dp) Modifier.border(1.dp, V.c.hairline, RoundedCornerShape(corner)) else Modifier),
+        ) { content() }
     }
 
     companion object { const val EXTRA_PEER = "peer" }
