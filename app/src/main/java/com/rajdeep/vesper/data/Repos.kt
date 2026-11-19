@@ -51,14 +51,21 @@ class AuthRepository @Inject constructor(
     private val lifecycle: AppLifecycle,
     private val notifier: Notifier,
     private val push: PushRegistrar,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val ctx: android.content.Context,
 ) {
+    /** App-scoped Android ID (stable across reinstall for this signing key), salted and hashed. */
+    private fun hwid(): String = runCatching {
+        val id = android.provider.Settings.Secure.getString(ctx.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: return ""
+        java.security.MessageDigest.getInstance("SHA-256").digest("vesper-hw:$id".toByteArray()).joinToString("") { "%02x".format(it) }
+    }.getOrDefault("")
+
     suspend fun availability(u: String): Availability =
         api.get("/v1/auth/available?u=" + URLEncoder.encode(u, "UTF-8"), Availability.serializer(), auth = false)
 
     /** Creates a fresh device identity (libsignal keys) and registers it with the server. */
     suspend fun authenticate(username: String, password: String, signUp: Boolean) {
         val gen = withContext(Dispatchers.Default) { SignalKeygen.newDevice(Build.MODEL ?: "Android") }
-        val req = AuthRequest(username.trim().lowercase(), password, gen.registration)
+        val req = AuthRequest(username.trim().lowercase(), password, gen.registration.copy(hwid = hwid()))
         val res = api.post(if (signUp) "/v1/auth/signup" else "/v1/auth/signin", req, AuthRequest.serializer(), AuthResponse.serializer(), auth = false)
         withContext(Dispatchers.IO) {
             db.clearAllTables()

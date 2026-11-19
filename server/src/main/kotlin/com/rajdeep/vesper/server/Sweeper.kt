@@ -7,6 +7,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.bson.Document
 import org.slf4j.LoggerFactory
 
 /**
@@ -58,6 +59,14 @@ class Sweeper(private val db: Db, private val media: MediaService, private val h
         db.privateMeta.deleteMany(Filters.lte("exp", nowD))
         db.activity.deleteMany(Filters.lte("exp", nowD))
         db.refresh.deleteMany(Filters.lte("exp", nowD))
+
+        // 4. Devices unseen for longer than a refresh token lives can never sign in again (uninstalled, lost phone).
+        val dead = db.devices.find(Filters.lt("seen", (now - Tokens.REFRESH_TTL_MS).asDate())).limit(200).toList()
+        dead.forEach { d ->
+            val f = Document("uid", d.str("uid")).append("d", d.int("d"))
+            db.devices.deleteOne(f); db.preKeys.deleteMany(f); db.refresh.deleteMany(f)
+            db.envelopes.deleteMany(Document("toUid", d.str("uid")).append("toD", d.int("d")))
+        }
         lastSweep = now
     }
 

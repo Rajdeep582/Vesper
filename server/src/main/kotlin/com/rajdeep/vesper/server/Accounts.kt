@@ -225,9 +225,15 @@ class Accounts(
         }
         r.preKeys.forEach { if (it.publicKey.length > 256) bad("device", "Bad prekey") }
         r.kyberPreKeys.forEach { if (it.publicKey.length > 4096) bad("device", "Bad kyber prekey") }
+        if (r.hwid.length > 128) bad("device", "Bad device id")
     }
 
     private suspend fun registerDevice(uid: String, r: DeviceRegistration): Int {
+        // Same phone signing in again (e.g. after uninstall without sign-out): its old device record is dead — drop it,
+        // whichever account it belonged to. One app install holds one account at a time.
+        if (r.hwid.isNotBlank()) {
+            db.devices.find(Document("hw", r.hwid)).toList().forEach { revokeDevice(it.str("uid")!!, it.int("d")!!, "replaced") }
+        }
         val existing = db.devices.find(Document("uid", uid)).toList()
         val used = existing.mapNotNull { it.int("d") }.toSet()
         var did = (1..Limits.MAX_DEVICES_PER_USER).firstOrNull { it !in used }
@@ -244,6 +250,7 @@ class Accounts(
                 "spk" to doc("id" to r.signedPreKey.id, "pub" to r.signedPreKey.publicKey, "sig" to r.signedPreKey.signature),
                 "kyl" to doc("id" to r.kyberLastResort.id, "pub" to r.kyberLastResort.publicKey, "sig" to r.kyberLastResort.signature),
                 "label" to r.label.take(40), "at" to now.asDate(), "seen" to now.asDate(),
+                "hw" to r.hwid.ifBlank { null },
             ),
         )
         storePreKeys(uid, did, PreKeyUpload(r.preKeys, r.kyberPreKeys))

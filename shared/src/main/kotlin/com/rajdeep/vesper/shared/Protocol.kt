@@ -74,6 +74,8 @@ data class DeviceRegistration(
     val preKeys: List<PreKeyDto>,
     val kyberPreKeys: List<KyberPreKeyDto>,
     val label: String = "Android",
+    /** Salted hash of the phone's app-scoped Android ID. Survives reinstall, so a reinstall replaces the old device. */
+    val hwid: String = "",
 )
 
 @Serializable data class AuthRequest(val username: String, val password: String, val device: DeviceRegistration)
