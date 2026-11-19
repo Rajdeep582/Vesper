@@ -18,6 +18,8 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
@@ -45,6 +47,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.DeleteForever
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -182,6 +188,10 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    fun deleteLocal(ids: List<String>) = viewModelScope.launch { messages.deleteLocal(ids) }
+    fun adminDeleteMany(ms: List<MessageEntity>) = viewModelScope.launch {
+        ms.mapNotNull { it.serverId }.forEach { sid -> runCatching { admin.deleteHall(sid) }.onFailure { e -> error.value = e.message } }
+    }
     fun adminDelete(m: MessageEntity) = viewModelScope.launch { m.serverId?.let { runCatching { admin.deleteHall(it) }.onFailure { e -> error.value = e.message } } }
     fun adminMute(m: MessageEntity, minutes: Long?) = viewModelScope.launch { runCatching { admin.mute(m.senderId, minutes) }.onFailure { e -> error.value = e.message } }
 
@@ -204,6 +214,11 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
     val listState = rememberLazyListState()
     val now = rememberNow { vm.now() }
     var menuFor by remember { mutableStateOf<MessageEntity?>(null) }
+    val selected = remember { androidx.compose.runtime.mutableStateListOf<String>() }
+    val selecting = selected.isNotEmpty()
+    fun toggle(m: MessageEntity) { if (m.state == MsgState.SYSTEM) return; fb.tick(); if (m.localId in selected) selected.remove(m.localId) else selected.add(m.localId) }
+    androidx.activity.compose.BackHandler(enabled = selecting) { selected.clear() }
+    LaunchedEffect(items) { val ids = items.map { it.localId }.toSet(); selected.retainAll { it in ids } }
     var viewer by remember { mutableStateOf<MediaRef?>(null) }
     var attachOpen by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -238,7 +253,35 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
 
     Box(Modifier.fillMaxSize().background(V.c.bg)) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            ChatHeader(vm.scope, peerUser?.username, onBack, onOpenInfo, items.size, link)
+            androidx.compose.animation.AnimatedContent(
+                selecting,
+                transitionSpec = {
+                    (fadeIn(Motion.tw(Motion.M)) + androidx.compose.animation.slideInVertically(Motion.spring()) { -it / 2 }) togetherWith
+                        (fadeOut(Motion.tw(Motion.S)) + androidx.compose.animation.slideOutVertically(Motion.tw(Motion.S)) { -it / 3 })
+                },
+                label = "header",
+            ) { sel ->
+                if (!sel) ChatHeader(vm.scope, peerUser?.username, onBack, onOpenInfo, items.size, link)
+                else {
+                    val chosen = items.filter { it.localId in selected }
+                    val clipboard = LocalClipboard.current
+                    SelectionBar(
+                        count = selected.size,
+                        canCopy = chosen.any { it.kind == MessageKind.TEXT.name && it.text != null },
+                        canDeleteEveryone = vm.isAdmin && vm.scope == Scope.HALL && chosen.any { it.serverId != null },
+                        onClose = { selected.clear() },
+                        onCopy = {
+                            val text = chosen.filter { it.kind == MessageKind.TEXT.name && it.text != null }.joinToString("\n") { it.text!! }
+                            scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("messages", text))) }
+                            vm.error.value = if (chosen.size == 1) "Copied" else "Copied ${chosen.size} messages"
+                            selected.clear()
+                        },
+                        onDelete = { fb.press(); vm.deleteLocal(selected.toList()); vm.error.value = "Removed from this phone"; selected.clear() },
+                        onDeleteEveryone = { vm.adminDeleteMany(chosen); selected.clear() },
+                        onDetails = if (chosen.size == 1) ({ menuFor = chosen.first(); selected.clear() }) else null,
+                    )
+                }
+            }
             Banner(link != Link.ONLINE || reach == Reach.WAKING, when {
                 reach == Reach.WAKING -> "Waking the server…"
                 link == Link.CONNECTING -> "Connecting…"
@@ -266,9 +309,12 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
                                 showName = vm.scope == Scope.HALL,
                                 groupedWithPrev = grouped(prev, m) && sameDay(prev!!.createdAt, m.createdAt),
                                 groupedWithNext = grouped(m, next),
-                                onLongPress = { fb.longPress(); menuFor = m },
-                                onImage = { viewer = it },
+                                onLongPress = { fb.longPress(); if (m.state != MsgState.SYSTEM) { if (m.localId !in selected) selected.add(m.localId) } },
+                                onImage = { if (selecting) toggle(m) else viewer = it },
                                 onRetry = { vm.retry(m.localId) },
+                                selecting = selecting,
+                                selected = m.localId in selected,
+                                onToggle = { toggle(m) },
                             )
                         }
                     }
@@ -281,7 +327,7 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
                 }
             }
             val mutedNow = vm.scope == Scope.HALL && (muted ?: 0) > now
-            Box(Modifier.navigationBarsPadding().imePadding()) {
+            Box(Modifier.navigationBarsPadding().imePadding().graphicsLayer { alpha = if (selecting) 0.35f else 1f }) {
                 Composer(
                     enabled = !mutedNow,
                     disabledReason = if (mutedNow) "You're muted in the Hall" + (muted?.takeIf { it < Long.MAX_VALUE / 2 }?.let { " until " + clock(it) } ?: "") else null,
@@ -469,5 +515,34 @@ fun dayLabel(ms: Long): String {
         sameDay(ms, now) -> "Today"
         sameDay(ms, now - 86_400_000) -> "Yesterday"
         else -> dayFmt.format(java.util.Date(ms))
+    }
+}
+
+
+@Composable
+private fun SelectionBar(
+    count: Int, canCopy: Boolean, canDeleteEveryone: Boolean,
+    onClose: () -> Unit, onCopy: () -> Unit, onDelete: () -> Unit, onDeleteEveryone: () -> Unit, onDetails: (() -> Unit)?,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp).clip(RoundedCornerShape(18.dp)).background(V.c.s2)
+            .border(1.dp, V.accent.copy(alpha = 0.35f), RoundedCornerShape(18.dp)).padding(horizontal = 4.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconAction(Icons.Rounded.Close, "Cancel selection", tint = V.c.text, onClick = onClose)
+        androidx.compose.animation.AnimatedContent(
+            count,
+            transitionSpec = {
+                val up = targetState > initialState
+                (androidx.compose.animation.slideInVertically(Motion.spring()) { if (up) it else -it } + fadeIn()) togetherWith
+                    (androidx.compose.animation.slideOutVertically(Motion.spring()) { if (up) -it else it } + fadeOut())
+            },
+            label = "count",
+        ) { n -> Text(n.toString(), style = V.t.subhead.copy(fontFamily = com.rajdeep.vesper.ui.theme.Mono), color = V.accent) }
+        Text(" selected", style = V.t.subhead, color = V.c.text, modifier = Modifier.weight(1f))
+        if (onDetails != null) IconAction(Icons.Rounded.Info, "Details", tint = V.c.text2, onClick = onDetails)
+        if (canCopy) IconAction(Icons.Rounded.ContentCopy, "Copy", tint = V.c.text, onClick = onCopy)
+        IconAction(Icons.Rounded.Delete, "Remove from this phone", tint = V.c.error, onClick = onDelete)
+        if (canDeleteEveryone) IconAction(Icons.Rounded.DeleteForever, "Delete for everyone", tint = V.c.error, onClick = onDeleteEveryone)
     }
 }

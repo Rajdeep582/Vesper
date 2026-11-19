@@ -146,6 +146,12 @@ class Messages @Inject constructor(
         dao.delete(listOf(localId))
     }
 
+    /** Remove messages from this phone only (others keep theirs until expiry). */
+    suspend fun deleteLocal(ids: List<String>) {
+        ids.forEach { id -> dao.get(id)?.let { media.purgeStaged(it.stagedBlob) } }
+        dao.delete(ids)
+    }
+
     fun flushAsync() { scope.launch { flush() } }
 
     /** Sends pending messages in order. Stops at the first transport failure; the next (re)connect resumes. */

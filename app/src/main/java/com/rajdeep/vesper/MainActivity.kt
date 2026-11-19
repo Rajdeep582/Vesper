@@ -153,7 +153,7 @@ class MainActivity : ComponentActivity() {
                         label = "root",
                     ) { s ->
                         when (s) {
-                            2 -> SignedIn((state as? SessionState.SignedIn)?.session?.isAdmin == true)
+                            2 -> SignedIn((state as? SessionState.SignedIn)?.session?.isAdmin == true, (state as? SessionState.SignedIn)?.session?.userId)
                             1 -> AuthScreen((state as? SessionState.SignedOut)?.reason)
                             else -> Box(Modifier.fillMaxSize().background(V.c.bg), contentAlignment = Alignment.Center) { DuskGlyph(72.dp) }
                         }
@@ -169,7 +169,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun SignedIn(isAdmin: Boolean) {
+    private fun SignedIn(isAdmin: Boolean, myId: String?) {
         val nav = rememberNavController()
         val peer by openPeer.collectAsState()
         LaunchedEffect(peer) { peer?.let { nav.navigate(DirectChatRoute(it)) { launchSingleTop = true }; openPeer.value = null } }
@@ -191,7 +191,7 @@ class MainActivity : ComponentActivity() {
             popEnterTransition = { fadeIn(androidx.compose.animation.core.tween(300), initialAlpha = 0.85f) + slideInHorizontally(androidx.compose.animation.core.tween(300)) { -it / 12 } },
             popExitTransition = { fadeOut(androidx.compose.animation.core.tween(300, easing = { (it * 1.8f).coerceAtMost(1f) })) + scaleOut(androidx.compose.animation.core.tween(300), targetScale = 0.86f) + slideOutHorizontally(androidx.compose.animation.core.tween(300)) { it / 4 } },
         ) {
-            composable<HomeRoute> { Page(this) { Home(nav, isAdmin) } }
+            composable<HomeRoute> { Page(this) { Home(nav, isAdmin, myId) } }
             composable<DirectChatRoute> { Page(this) {
                 val r = it.arguments?.getString("peer") ?: ""
                 CompositionLocalProvider(LocalSpace provides Space.DIRECT) {
@@ -211,8 +211,10 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Home(nav: NavHostController, isAdmin: Boolean) {
+    private fun Home(nav: NavHostController, isAdmin: Boolean, myId: String?) {
+        // Tapping a person opens the private chat directly; tapping yourself goes to You.
         var tab by rememberSaveable { mutableStateOf(Tab.HALL) }
+        val openPerson: (String) -> Unit = { id -> if (id == myId) tab = Tab.YOU else nav.navigate(DirectChatRoute(id)) { launchSingleTop = true } }
         val tabs = Tab.entries.filter { it != Tab.CONSOLE || isAdmin }
         val unread by messages.unreadDirect().collectAsState(0)
         val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
@@ -226,9 +228,9 @@ class MainActivity : ComponentActivity() {
                 }, label = "tabs") { t ->
                     CompositionLocalProvider(LocalSpace provides t.space) { Box(Modifier.fillMaxSize().background(V.c.bg)) {
                         when (t) {
-                            Tab.HALL -> ChatScreen(onBack = null, onOpenInfo = null, onOpenProfile = { nav.navigate(ProfileRoute(it)) })
+                            Tab.HALL -> ChatScreen(onBack = null, onOpenInfo = null, onOpenProfile = openPerson)
                             Tab.DIRECT -> DirectListScreen(onOpen = { nav.navigate(DirectChatRoute(it)) }, onFindPeople = { tab = Tab.PEOPLE })
-                            Tab.PEOPLE -> PeopleScreen(onProfile = { nav.navigate(ProfileRoute(it)) })
+                            Tab.PEOPLE -> PeopleScreen(onProfile = openPerson)
                             Tab.YOU -> YouScreen()
                             Tab.CONSOLE -> ConsoleScreen(onMember = { nav.navigate(MemberRoute(it)) })
                         }

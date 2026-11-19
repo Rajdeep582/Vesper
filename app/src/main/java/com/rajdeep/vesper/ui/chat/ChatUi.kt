@@ -19,6 +19,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -145,6 +147,9 @@ fun MessageBubble(
     onLongPress: () -> Unit,
     onImage: (MediaRef) -> Unit,
     onRetry: () -> Unit,
+    selecting: Boolean = false,
+    selected: Boolean = false,
+    onToggle: () -> Unit = {},
 ) {
     if (m.state == MsgState.SYSTEM) { SystemLine(m.text ?: ""); return }
     val mine = m.outgoing
@@ -161,12 +166,22 @@ fun MessageBubble(
     else RoundedCornerShape(if (groupedWithPrev) small else big, big, big, if (groupedWithNext) small else small)
 
     val fresh = remember(m.localId) { kotlin.math.abs(System.currentTimeMillis() - m.createdAt) < 4_000 }
+    val selTint by androidx.compose.animation.animateColorAsState(if (selected) V.accent.copy(alpha = 0.12f) else androidx.compose.ui.graphics.Color.Transparent, tween(Motion.M), label = "selTint")
+    val pressScale by animateFloatAsState(if (selected) 0.965f else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 520f), label = "selScale")
     Row(
-        Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = if (groupedWithPrev) 2.dp else 10.dp)
+        Modifier.fillMaxWidth().background(selTint)
+            .then(if (selecting) Modifier.combinedClickable(remember { MutableInteractionSource() }, null, onClick = onToggle) else Modifier)
+            .padding(start = 12.dp, end = 12.dp, top = if (groupedWithPrev) 2.dp else 10.dp, bottom = if (selecting) 2.dp else 0.dp)
             .then(Modifier.bubbleIn(fresh, mine)),
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Bottom,
     ) {
+        com.rajdeep.vesper.ui.components.Reveal(
+            selecting,
+            enter = androidx.compose.animation.expandHorizontally(androidx.compose.animation.core.spring(dampingRatio = 0.8f, stiffness = 420f)) + androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.shrinkHorizontally(tween(Motion.M)) + androidx.compose.animation.fadeOut(tween(Motion.S)),
+        ) { SelectDot(selected, Modifier.padding(end = 10.dp, bottom = 6.dp)) }
+        if (selecting && mine) Spacer(Modifier.weight(1f))
         if (!mine && showAvatar) {
             Box(Modifier.width(36.dp)) { if (!groupedWithNext) Monogram(m.senderName, 30.dp) }
         }
@@ -176,8 +191,9 @@ fun MessageBubble(
                 Text(m.senderName, style = V.t.label, color = accent.copy(alpha = 0.9f), modifier = Modifier.padding(start = 6.dp, bottom = 3.dp))
             }
             Box(
-                Modifier.alpha(bubbleAlpha).clip(shape).background(bg)
-                    .combinedClickable(remember { MutableInteractionSource() }, null, onLongClick = onLongPress, onClick = { if (m.state == MsgState.FAILED) onRetry() }),
+                Modifier.graphicsLayer { scaleX = pressScale; scaleY = pressScale }.alpha(bubbleAlpha).clip(shape).background(bg)
+                    .then(if (selected) Modifier.border(1.5.dp, V.accent.copy(alpha = 0.7f), shape) else Modifier)
+                    .combinedClickable(remember { MutableInteractionSource() }, null, onLongClick = onLongPress, onClick = { if (selecting) onToggle() else if (m.state == MsgState.FAILED) onRetry() }),
             ) {
                 when (kind) {
                     MessageKind.TEXT -> Column(Modifier.padding(start = 14.dp, end = 12.dp, top = 9.dp, bottom = 7.dp)) {
@@ -472,6 +488,22 @@ private fun RecordingStrip(rec: RecordUi, level: Float, elapsedMs: Long, cancelP
             Icon(Icons.Rounded.Stop, "Discard recording", tint = V.c.error, modifier = Modifier.size(28.dp).clip(CircleShape).pressable(onClick = onCancel))
         } else {
             Text("‹ slide to cancel", style = V.t.label, color = V.c.text2.copy(alpha = 1f - cancelP), modifier = Modifier.graphicsLayer { translationX = dx * 0.4f })
+        }
+    }
+}
+
+
+/** Selection marker: hollow ring that springs into a filled accent disc with a check. */
+@Composable
+fun SelectDot(selected: Boolean, modifier: Modifier = Modifier) {
+    val fill by animateFloatAsState(if (selected) 1f else 0f, androidx.compose.animation.core.spring(dampingRatio = 0.5f, stiffness = 600f), label = "dot")
+    Box(
+        modifier.size(22.dp).clip(CircleShape)
+            .border(1.5.dp, if (selected) V.accent else V.c.text3, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(Modifier.size(22.dp).graphicsLayer { scaleX = fill; scaleY = fill; alpha = fill.coerceIn(0f, 1f) }.clip(CircleShape).background(V.accent), contentAlignment = Alignment.Center) {
+            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Rounded.Check, null, tint = V.c.bg, modifier = Modifier.size(14.dp))
         }
     }
 }

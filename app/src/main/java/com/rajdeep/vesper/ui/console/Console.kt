@@ -114,12 +114,21 @@ class ConsoleViewModel @Inject constructor(private val repo: AdminRepository) : 
     init {
         refresh()
         viewModelScope.launch {
-            repo.activity.collect { e -> activity.value = (listOf(e) + (activity.value ?: emptyList())).take(300); if (tab.value == ConsoleTab.OVERVIEW) loadOverview() }
+            repo.activity.collect { e ->
+                activity.value = (listOf(e) + (activity.value ?: emptyList())).take(300)
+                if (tab.value == ConsoleTab.OVERVIEW) loadOverview()
+                // Member set or status changed: refresh the list right away (sign-ups, deletions, suspensions, sign-ins).
+                if (e.type in setOf("signup", "signin", "account_deleted", "suspended", "unsuspended", "muted", "unmuted", "deleted")) search(query.value)
+            }
         }
         viewModelScope.launch {
-            repo.presence.collect { p -> members.value = members.value?.map { if (it.id == p.userId) it.copy(online = p.online, lastActiveAt = p.lastActiveAt) else it } }
+            repo.presence.collect { p ->
+                val cur = members.value
+                if (cur != null && cur.none { it.id == p.userId }) search(query.value)
+                else members.value = cur?.map { if (it.id == p.userId) it.copy(online = p.online, lastActiveAt = p.lastActiveAt) else it }
+            }
         }
-        viewModelScope.launch { while (true) { delay(30_000); if (tab.value == ConsoleTab.OVERVIEW) loadOverview() } }
+        viewModelScope.launch { while (true) { delay(15_000); if (tab.value == ConsoleTab.OVERVIEW) loadOverview(); if (tab.value == ConsoleTab.MEMBERS) search(query.value) } }
     }
 
     private fun <T> guard(block: suspend () -> T, set: (T) -> Unit) = viewModelScope.launch {
@@ -134,7 +143,15 @@ class ConsoleViewModel @Inject constructor(private val repo: AdminRepository) : 
         guard({ repo.hall() }) { hall.value = it.items.reversed() }
         guard({ repo.conversations() }) { conversations.value = it.items }
     }
-    fun select(t: ConsoleTab) { tab.value = t; if (t == ConsoleTab.HALL) guard({ repo.hall() }) { hall.value = it.items.reversed() } }
+    fun select(t: ConsoleTab) {
+        tab.value = t
+        when (t) {
+            ConsoleTab.HALL -> guard({ repo.hall() }) { hall.value = it.items.reversed() }
+            ConsoleTab.MEMBERS -> search(query.value)
+            ConsoleTab.OVERVIEW -> loadOverview()
+            else -> {}
+        }
+    }
     fun search(q: String) { query.value = q; guard({ repo.members(q) }) { members.value = it.items } }
     fun deleteHall(id: String) = viewModelScope.launch {
         runCatching { repo.deleteHall(id) }.onSuccess { hall.value = hall.value?.filterNot { it.id == id }; toast.value = "Message deleted for everyone" }.onFailure { error.value = it.message }
