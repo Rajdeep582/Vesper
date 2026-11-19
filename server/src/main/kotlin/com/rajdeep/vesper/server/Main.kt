@@ -235,6 +235,15 @@ private fun Route.memberRoutes(s: Services) {
     get("/backup/items") { call.respond(s.backups.list(call.caller().uid)) }
     put("/backup/items") { s.backups.put(call.caller().uid, call.receive<BackupItems>().items); call.respond(Ok()) }
     post("/backup/delete") { s.backups.delete(call.caller().uid, call.receive<BackupIds>().ids); call.respond(Ok()) }
+    post("/direct/unsend") { s.direct.unsend(call.caller(), call.receive<BackupIds>().ids); call.respond(Ok()) }
+    /** Hall delete for everyone: your own messages, or any message if you are the admin. */
+    post("/hall/delete") {
+        val c = call.caller()
+        val ids = call.receive<BackupIds>().ids.take(500)
+        val allowed = if (c.isAdmin) ids else s.hall.ownedBy(c.uid, ids)
+        if (allowed.isNotEmpty()) s.hall.delete(allowed)
+        call.respond(Ok())
+    }
     post("/direct/receipts") { call.respond(s.direct.receipts(call.caller(), call.receive<com.rajdeep.vesper.shared.ReceiptQuery>())) }
     post("/direct/ack") { s.direct.ack(call.caller(), DirectAck(call.receive<AckIds>().ids)); call.respond(Ok()) }
 

@@ -295,6 +295,8 @@ sealed interface Frame
 /** Sender asks for the current receipt state of its own sent-but-not-seen messages (catch-up after being offline). */
 @Serializable data class ReceiptQuery(val ids: List<String>)
 @Serializable data class ReceiptState(val delivered: List<String>, val seen: List<String>)
+/** Server → both sides of a private chat: these messages were deleted for everyone. */
+@Serializable @SerialName("direct.deleted") data class DirectDeleted(val mids: List<String>) : Frame
 /** Server → sender: [byUserId] has seen these messages (blue ticks). */
 @Serializable @SerialName("direct.seen") data class DirectSeen(val mids: List<String>, val byUserId: String) : Frame
 @Serializable @SerialName("ping") data class Ping(val at: Long = 0) : Frame

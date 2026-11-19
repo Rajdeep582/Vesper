@@ -175,6 +175,12 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE scope='hall' AND serverId IN (:sids)")
     suspend fun deleteHallByServerIds(sids: List<String>)
 
+    @Query("SELECT * FROM messages WHERE serverId IN (:sids)")
+    suspend fun byServerIds(sids: List<String>): List<MessageEntity>
+
+    @Query("DELETE FROM messages WHERE scope='direct' AND serverId IN (:sids)")
+    suspend fun deleteDirectByServerIds(sids: List<String>)
+
     @Query("SELECT * FROM messages WHERE scope='hall' AND serverId IN (:sids)")
     suspend fun hallByServerIds(sids: List<String>): List<MessageEntity>
 

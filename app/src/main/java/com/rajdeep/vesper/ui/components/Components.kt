@@ -514,6 +514,12 @@ fun ChatBackdrop(modifier: Modifier = Modifier) {
                     y += step
                 }
                 stars.forEach { (p, sz) -> drawCircle(accent.copy(alpha = if (dark) 0.16f else 0.10f), sz.dp.toPx(), p) }
+                // Fade into the plain background at the bottom so the chat meets the tab bar without a seam.
+                val fadeH = 160.dp.toPx()
+                drawRect(
+                    androidx.compose.ui.graphics.Brush.verticalGradient(listOf(androidx.compose.ui.graphics.Color.Transparent, bg), startY = size.height - fadeH, endY = size.height),
+                    topLeft = androidx.compose.ui.geometry.Offset(0f, size.height - fadeH),
+                )
             }
         },
     )

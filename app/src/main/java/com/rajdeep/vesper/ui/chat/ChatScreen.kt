@@ -21,6 +21,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.border
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -192,8 +194,9 @@ class ChatViewModel @Inject constructor(
     }
 
     fun deleteLocal(ids: List<String>) = viewModelScope.launch { messages.deleteLocal(ids) }
-    fun adminDeleteMany(ms: List<MessageEntity>) = viewModelScope.launch {
-        ms.mapNotNull { it.serverId }.forEach { sid -> runCatching { admin.deleteHall(sid) }.onFailure { e -> error.value = e.message } }
+    fun deleteForEveryone(ids: List<String>) = viewModelScope.launch {
+        runCatching { messages.deleteForEveryone(ids) }.onSuccess { error.value = if (ids.size == 1) "Deleted for everyone" else "Deleted ${ids.size} messages for everyone" }
+            .onFailure { error.value = (it as? com.rajdeep.vesper.core.net.ApiException)?.message ?: "Couldn't delete — check your connection" }
     }
     fun adminDelete(m: MessageEntity) = viewModelScope.launch { m.serverId?.let { runCatching { admin.deleteHall(it) }.onFailure { e -> error.value = e.message } } }
     fun adminMute(m: MessageEntity, minutes: Long?) = viewModelScope.launch { runCatching { admin.mute(m.senderId, minutes) }.onFailure { e -> error.value = e.message } }
@@ -219,6 +222,7 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
     var menuFor by remember { mutableStateOf<MessageEntity?>(null) }
     var infoSheet by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
+    var deleteAsk by remember { mutableStateOf<List<String>?>(null) }
     val selected = remember { androidx.compose.runtime.mutableStateListOf<String>() }
     val selecting = selected.isNotEmpty()
     fun toggle(m: MessageEntity) { if (m.state == MsgState.SYSTEM) return; fb.tick(); if (m.localId in selected) selected.remove(m.localId) else selected.add(m.localId) }
@@ -274,7 +278,6 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
                     SelectionBar(
                         count = selected.size,
                         canCopy = chosen.any { it.kind == MessageKind.TEXT.name && it.text != null },
-                        canDeleteEveryone = vm.isAdmin && vm.scope == Scope.HALL && chosen.any { it.serverId != null },
                         onClose = { selected.clear() },
                         onCopy = {
                             val text = chosen.filter { it.kind == MessageKind.TEXT.name && it.text != null }.joinToString("\n") { it.text!! }
@@ -282,8 +285,7 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
                             vm.error.value = if (chosen.size == 1) "Copied" else "Copied ${chosen.size} messages"
                             selected.clear()
                         },
-                        onDelete = { fb.press(); vm.deleteLocal(selected.toList()); vm.error.value = "Removed from this phone"; selected.clear() },
-                        onDeleteEveryone = { vm.adminDeleteMany(chosen); selected.clear() },
+                        onDelete = { fb.press(); deleteAsk = selected.toList() },
                         onDetails = if (chosen.size == 1) ({ menuFor = chosen.first(); selected.clear() }) else null,
                     )
                 }
@@ -403,6 +405,24 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
             }
         }
     }
+    deleteAsk?.let { ids ->
+        val rows = items.filter { it.localId in ids }
+        // Everyone: all chosen must be mine and on the server — or, in the Hall, the admin may remove anything.
+        val canEveryone = rows.isNotEmpty() && rows.all { it.serverId != null && (it.outgoing || (vm.isAdmin && vm.scope == Scope.HALL)) }
+        ModalBottomSheet(onDismissRequest = { deleteAsk = null }, containerColor = V.c.s1) {
+            SheetTitle(
+                if (ids.size == 1) "Delete message?" else "Delete ${ids.size} messages?",
+                if (canEveryone) "Delete for everyone removes it from the server and every phone." else "Only your own sent messages can be deleted for everyone.",
+            )
+            DeleteChoice(Icons.Rounded.Delete, "Delete for me", "Removes from this phone only", V.c.text) {
+                vm.deleteLocal(ids); vm.error.value = "Deleted for you"; deleteAsk = null; selected.clear()
+            }
+            if (canEveryone) DeleteChoice(Icons.Rounded.DeleteForever, "Delete for everyone", "Gone from the server and all phones", V.c.error) {
+                vm.deleteForEveryone(ids); deleteAsk = null; selected.clear()
+            }
+            Spacer(Modifier.height(28.dp))
+        }
+    }
     if (confirmClear) {
         ModalBottomSheet(onDismissRequest = { confirmClear = false }, containerColor = V.c.s1) {
             SheetTitle("Clear this conversation?", "Removes every message here from this phone. Others keep theirs until they expire.")
@@ -465,7 +485,7 @@ private fun ChatHeader(scope: String, peerName: String?, onBack: (() -> Unit)?, 
         } else {
             Column(Modifier.weight(1f).padding(start = 4.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(7.dp).clip(CircleShape).background(V.accent))
+                    com.rajdeep.vesper.ui.components.HallMascot(30.dp)
                     Spacer(Modifier.width(10.dp))
                     Text("The Hall", style = V.t.title, color = V.c.text)
                 }
@@ -559,16 +579,32 @@ fun dayLabel(ms: Long): String {
 
 
 @Composable
-private fun SelectionBar(
-    count: Int, canCopy: Boolean, canDeleteEveryone: Boolean,
-    onClose: () -> Unit, onCopy: () -> Unit, onDelete: () -> Unit, onDeleteEveryone: () -> Unit, onDetails: (() -> Unit)?,
-) {
+private fun DeleteChoice(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, sub: String, tint: androidx.compose.ui.graphics.Color, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp).clip(RoundedCornerShape(18.dp)).background(V.c.s2)
-            .border(1.dp, V.accent.copy(alpha = 0.35f), RoundedCornerShape(18.dp)).padding(horizontal = 4.dp, vertical = 2.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp).clip(RoundedCornerShape(18.dp)).background(V.c.s2)
+            .pressable(scaleTo = 0.98f, onClick = onClick).padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconAction(Icons.Rounded.Close, "Cancel selection", tint = V.c.text, onClick = onClose)
+        Box(Modifier.size(38.dp).clip(CircleShape).background(tint.copy(alpha = 0.14f)), contentAlignment = Alignment.Center) {
+            Icon(icon, null, tint = tint, modifier = Modifier.size(20.dp))
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = V.t.subhead, color = tint)
+            Text(sub, style = V.t.label, color = V.c.text2)
+        }
+    }
+}
+
+@Composable
+private fun SelectionBar(count: Int, canCopy: Boolean, onClose: () -> Unit, onCopy: () -> Unit, onDelete: () -> Unit, onDetails: (() -> Unit)?) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).height(56.dp).clip(RoundedCornerShape(28.dp))
+            .background(androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(V.accent.copy(alpha = 0.16f), V.c.s2)))
+            .border(1.dp, V.accent.copy(alpha = 0.30f), RoundedCornerShape(28.dp)).padding(horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        BarIcon(Icons.Rounded.Close, "Cancel selection", V.c.text, onClose)
         androidx.compose.animation.AnimatedContent(
             count,
             transitionSpec = {
@@ -576,12 +612,18 @@ private fun SelectionBar(
                 (androidx.compose.animation.slideInVertically(Motion.spring()) { if (up) it else -it } + fadeIn()) togetherWith
                     (androidx.compose.animation.slideOutVertically(Motion.spring()) { if (up) -it else it } + fadeOut())
             },
-            label = "count",
+            label = "count", modifier = Modifier.padding(start = 4.dp),
         ) { n -> Text(n.toString(), style = V.t.subhead.copy(fontFamily = com.rajdeep.vesper.ui.theme.Mono), color = V.accent) }
         Text(" selected", style = V.t.subhead, color = V.c.text, modifier = Modifier.weight(1f))
-        if (onDetails != null) IconAction(Icons.Rounded.Info, "Details", tint = V.c.text2, onClick = onDetails)
-        if (canCopy) IconAction(Icons.Rounded.ContentCopy, "Copy", tint = V.c.text, onClick = onCopy)
-        IconAction(Icons.Rounded.Delete, "Remove from this phone", tint = V.c.error, onClick = onDelete)
-        if (canDeleteEveryone) IconAction(Icons.Rounded.DeleteForever, "Delete for everyone", tint = V.c.error, onClick = onDeleteEveryone)
+        if (onDetails != null) BarIcon(Icons.Rounded.Info, "Details", V.c.text2, onDetails)
+        if (canCopy) BarIcon(Icons.Rounded.ContentCopy, "Copy", V.c.text, onCopy)
+        BarIcon(Icons.Rounded.Delete, "Delete", V.c.error, onDelete)
+    }
+}
+
+@Composable
+private fun BarIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, tint: androidx.compose.ui.graphics.Color, onClick: () -> Unit) {
+    Box(Modifier.size(44.dp).clip(CircleShape).pressable(scaleTo = 0.88f, onClick = onClick).semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
+        Icon(icon, null, tint = tint, modifier = Modifier.size(22.dp))
     }
 }

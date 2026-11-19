@@ -162,6 +162,18 @@ class Messages @Inject constructor(
         dao.delete(ids)
     }
 
+    /** Delete for everyone: Hall (own, or any for the admin) and own private messages. Removed here at once; others via frames. */
+    suspend fun deleteForEveryone(ids: List<String>) {
+        val rows = ids.mapNotNull { dao.get(it) }
+        val hall = rows.filter { it.scope == Scope.HALL }.mapNotNull { it.serverId }
+        val direct = rows.filter { it.scope == Scope.DIRECT && it.outgoing }.mapNotNull { it.serverId }
+        if (hall.isNotEmpty()) api.post("/v1/hall/delete", com.rajdeep.vesper.shared.BackupIds(hall), com.rajdeep.vesper.shared.BackupIds.serializer(), com.rajdeep.vesper.shared.Ok.serializer())
+        if (direct.isNotEmpty()) api.post("/v1/direct/unsend", com.rajdeep.vesper.shared.BackupIds(direct), com.rajdeep.vesper.shared.BackupIds.serializer(), com.rajdeep.vesper.shared.Ok.serializer())
+        rows.forEach { media.purgeStaged(it.stagedBlob) }
+        media.purge(rows.mapNotNull { r -> r.mediaJson?.let { VesperJson.decodeFromString(MediaRef.serializer(), it).mediaId.ifEmpty { null } } })
+        dao.delete(rows.map { it.localId })
+    }
+
     fun flushAsync() { scope.launch { flush() } }
 
     /** Sends pending messages in order. Stops at the first transport failure; the next (re)connect resumes. */
@@ -329,6 +341,11 @@ class Messages @Inject constructor(
             }
             is DirectEnv -> if (receiveEnvelope(f.env, live = true)) rt.send(DirectAck(listOf(f.env.id)))
             is DirectDelivered -> dao.markDelivered(f.mid)
+            is com.rajdeep.vesper.shared.DirectDeleted -> {
+                val rows = dao.byServerIds(f.mids).filter { it.scope == Scope.DIRECT }
+                media.purge(rows.mapNotNull { r -> r.mediaJson?.let { VesperJson.decodeFromString(MediaRef.serializer(), it).mediaId } })
+                dao.deleteDirectByServerIds(f.mids)
+            }
             is com.rajdeep.vesper.shared.DirectSeen -> dao.markSeen(f.mids)
             is HallMuted -> _hallMutedUntil.value = f.until?.takeIf { it > 0 } ?: if (f.until == null) Long.MAX_VALUE else null
             is AccountEnded -> session.end(f.reason)

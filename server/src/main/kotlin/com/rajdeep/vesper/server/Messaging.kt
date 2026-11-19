@@ -122,7 +122,10 @@ class Hall(
         )
     }
 
-    /** Admin hard delete: blob first, then the document. */
+    suspend fun ownedBy(uid: String, ids: List<String>): List<String> =
+        db.hall.find(Filters.and(Filters.`in`("_id", ids), Filters.eq("uid", uid))).projection(Document("_id", 1)).toList().map { it.str("_id")!! }
+
+    /** Hard delete (admin or the author): blob first, then the document. */
     suspend fun delete(ids: List<String>) {
         val docs = db.hall.find(Filters.`in`("_id", ids)).toList()
         val mediaIds = docs.mapNotNull { it.str("mid") }
@@ -234,6 +237,20 @@ class Direct(
         val docs = db.envelopes.find(Filters.and(Filters.eq("toUid", c.uid), Filters.eq("toD", c.did), Filters.gt("exp", now.asDate())))
             .sort(Sorts.ascending("at")).limit(500).toList()
         return PendingEnvelopes(docs.map(::envToDto), now)
+    }
+
+    /** Delete for everyone: only the sender's own messages. Removes metadata, undelivered envelopes, media and backups. */
+    suspend fun unsend(c: Caller, mids: List<String>) {
+        val docs = db.privateMeta.find(Filters.and(Filters.`in`("_id", mids.take(500)), Filters.eq("fromUid", c.uid))).toList()
+        if (docs.isEmpty()) return
+        val ids = docs.map { it.str("_id")!! }
+        media.purge(docs.mapNotNull { it.str("mediaId") })
+        db.envelopes.deleteMany(Filters.`in`("mid", ids))
+        db.privateMeta.deleteMany(Filters.`in`("_id", ids))
+        val peers = docs.map { it.str("toUid")!! }.toSet()
+        db.backups.deleteMany(Filters.`in`("_id", (peers + c.uid).flatMap { u -> ids.map { "$u:$it" } }))
+        val frame = com.rajdeep.vesper.shared.DirectDeleted(ids)
+        (peers + c.uid).forEach { hub.toUser(it, frame) }
     }
 
     /** Read receipt: only for messages this user actually received from [r.peerId]; marks them seen and tells the sender. */
