@@ -31,6 +31,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Done
 import androidx.compose.material.icons.rounded.DoneAll
+import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Lock
@@ -145,8 +146,8 @@ private fun ConversationItem(r: ConversationRow, onClick: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (r.lastOutgoing) {
                     Icon(
-                        when (r.lastState) { MsgState.PENDING -> Icons.Rounded.Schedule; MsgState.DELIVERED -> Icons.Rounded.DoneAll; else -> Icons.Rounded.Done },
-                        null, tint = if (r.lastState == MsgState.DELIVERED) V.accent else V.c.text3, modifier = Modifier.size(14.dp),
+                        when (r.lastState) { MsgState.PENDING -> Icons.Rounded.Schedule; MsgState.DELIVERED -> Icons.Rounded.DoneAll; MsgState.FAILED -> Icons.Rounded.ErrorOutline; else -> Icons.Rounded.Done },
+                        null, tint = when (r.lastState) { MsgState.DELIVERED -> V.accent; MsgState.FAILED -> V.c.error; else -> V.c.text3 }, modifier = Modifier.size(14.dp),
                     )
                     Spacer(Modifier.width(4.dp))
                 }
@@ -376,7 +377,8 @@ fun YouScreen(vm: YouViewModel = hiltViewModel()) {
                 Text(me?.username ?: "", style = V.t.title, color = V.c.text)
                 Text(
                     (if (me?.isAdmin == true) "Administrator · " else "") + "Member since " + joined(me?.joinedAt ?: 0),
-                    style = V.t.label, color = if (me?.isAdmin == true) V.c.console else V.c.text2, modifier = Modifier.padding(top = 4.dp),
+                    style = V.t.label, color = if (me?.isAdmin == true) V.c.console else V.c.text2,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.padding(top = 4.dp, start = 24.dp, end = 24.dp),
                 )
             }
             SectionLabel("Appearance")

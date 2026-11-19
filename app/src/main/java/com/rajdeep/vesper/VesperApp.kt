@@ -31,6 +31,7 @@ class VesperApp : Application(), Configuration.Provider {
     @Inject lateinit var session: SessionManager
     @Inject lateinit var lifecycle: AppLifecycle
     @Inject lateinit var messages: Messages
+    @Inject lateinit var push: com.rajdeep.vesper.data.PushRegistrar
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
@@ -38,9 +39,10 @@ class VesperApp : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         lifecycle.install()
+        push.init()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             session.load()
-            if (session.current() != null) lifecycle.onSignedIn()
+            if (session.current() != null) { lifecycle.onSignedIn(); push.register() }
         }
         SyncWorker.schedule(this)
     }

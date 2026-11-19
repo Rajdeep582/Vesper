@@ -292,7 +292,7 @@ private fun VoiceContent(localId: String, ref: MediaRef, mine: Boolean) {
                 fb.tick(); host.player.seek(ref.mediaId, f)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(duration(if (active) state.positionMs else dur), style = V.t.mono, color = V.c.text2)
+                Text(duration(if (active && (playing || state.positionMs > 0)) state.positionMs else dur), style = V.t.mono, color = V.c.text2)
                 Reveal(active, enter = fadeIn() + expandHorizontally(), exit = fadeOut() + shrinkHorizontally()) {
                     Text(
                         "${state.speed.let { if (it % 1f == 0f) it.toInt().toString() else it.toString() }}×",

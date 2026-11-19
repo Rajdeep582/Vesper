@@ -512,7 +512,7 @@ fun MemberScreen(onBack: () -> Unit, vm: MemberViewModel = hiltViewModel()) {
             SectionLabel("Details", Modifier.padding(top = 16.dp))
             Surface(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
                 Column {
-                    KV("Joined", joined(m.joinedAt) + " · " + clockFull(m.joinedAt)); Hairline()
+                    KV("Joined", clockFull(m.joinedAt)); Hairline()
                     KV("Signed-in devices", m.devices.toString()); Hairline()
                     KV("Hall messages · 72h", det.hallMessages72h.toString()); Hairline()
                     KV("Status", listOfNotNull(if (m.suspended) "Suspended" else "Active", m.hallMuteUntil?.let { "muted until " + if (it > 4_000_000_000_000L) "lifted" else clockFull(it) }).joinToString(" · "))
@@ -567,7 +567,10 @@ fun MemberScreen(onBack: () -> Unit, vm: MemberViewModel = hiltViewModel()) {
     }
 }
 
-@Composable private fun KV(k: String, v: String) = ListRow { Text(k, style = V.t.bodySmall, color = V.c.text2, modifier = Modifier.weight(1f)); Text(v, style = V.t.bodySmall, color = V.c.text) }
+@Composable private fun KV(k: String, v: String) = ListRow {
+    Text(k, style = V.t.bodySmall, color = V.c.text2, modifier = Modifier.padding(end = 16.dp))
+    Text(v, style = V.t.bodySmall, color = V.c.text, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+}
 @Composable private fun Action(t: String, danger: Boolean = false, onClick: () -> Unit) = ListRow(onClick = onClick) { Text(t, style = V.t.body, color = if (danger) V.c.error else V.c.text) }
 
 fun bytes(b: Long): String = when {

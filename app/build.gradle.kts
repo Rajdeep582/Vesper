@@ -18,6 +18,8 @@ fun cfg(key: String, default: String): String = (secrets.getProperty(key) ?: pro
 android {
     namespace = "com.rajdeep.vesper"
     compileSdk = 37
+    // NDK is only used to strip debug symbols from bundled native libs (libsignal, sqlcipher).
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         applicationId = "com.rajdeep.vesper"
@@ -26,6 +28,13 @@ android {
         versionCode = 1
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Phones only; keeps the APK small (libsignal ships large native libraries per ABI).
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+        // Firebase client config (public identifiers, not secrets). Empty => push disabled, app still works.
+        buildConfigField("String", "FCM_APP_ID", "\"${cfg("vesper.fcm.appId", "")}\"")
+        buildConfigField("String", "FCM_API_KEY", "\"${cfg("vesper.fcm.apiKey", "")}\"")
+        buildConfigField("String", "FCM_PROJECT_ID", "\"${cfg("vesper.fcm.projectId", "")}\"")
+        buildConfigField("String", "FCM_SENDER_ID", "\"${cfg("vesper.fcm.senderId", "")}\"")
     }
 
     val ks = rootProject.file("keystore.properties")
@@ -68,7 +77,11 @@ android {
     }
     packaging {
         resources.excludes += listOf("/META-INF/{AL2.0,LGPL2.1}", "/META-INF/INDEX.LIST", "/META-INF/versions/9/OSGI-INF/MANIFEST.MF")
+        // Desktop natives bundled inside the libsignal-client JVM jar are useless on Android.
+        resources.excludes += listOf("**/*.dylib", "**/*.dll", "/libsignal_jni*.so", "/signal_jni*")
         jniLibs.useLegacyPackaging = false
+        // libsignal's test-only native library is never needed at runtime.
+        jniLibs.excludes += "**/libsignal_jni_testing.so"
     }
 }
 
@@ -119,6 +132,9 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.libsignal.android)
     implementation(libs.media3.exoplayer)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
+    implementation(libs.kotlinx.coroutines.play.services)
 
     testImplementation(libs.kotlin.test)
     testImplementation(libs.junit)

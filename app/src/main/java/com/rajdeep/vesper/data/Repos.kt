@@ -49,6 +49,7 @@ class AuthRepository @Inject constructor(
     private val messages: Messages,
     private val lifecycle: AppLifecycle,
     private val notifier: Notifier,
+    private val push: PushRegistrar,
 ) {
     suspend fun availability(u: String): Availability =
         api.get("/v1/auth/available?u=" + URLEncoder.encode(u, "UTF-8"), Availability.serializer(), auth = false)
@@ -65,6 +66,7 @@ class AuthRepository @Inject constructor(
             db.users().upsert(listOf(UserEntity(res.user.id, res.user.username, res.user.joinedAt)))
         }
         lifecycle.onSignedIn()
+        push.register()
     }
 
     suspend fun signOut() {
