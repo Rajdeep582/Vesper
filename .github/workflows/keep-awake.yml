@@ -1,5 +1,6 @@
 # Backup keep-awake pinger for Render Free (primary: cron-job.org every 10 min).
-# Set repository variable VESPER_HEALTH_URL = https://<service>.onrender.com/health
+# GitHub may delay scheduled runs by several minutes; cron-job.org is the precise one.
+# Override with repository variable VESPER_HEALTH_URL if the service URL changes.
 name: keep-awake
 on:
   schedule:
@@ -8,6 +9,5 @@ on:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    if: ${{ vars.VESPER_HEALTH_URL != '' }}
     steps:
-      - run: curl -fsS --max-time 90 --retry 2 "${{ vars.VESPER_HEALTH_URL }}" || true
+      - run: curl -fsS --max-time 90 --retry 2 "${{ vars.VESPER_HEALTH_URL || 'https://vesper-api-mthr.onrender.com/health' }}" || true
