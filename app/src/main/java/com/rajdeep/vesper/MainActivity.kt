@@ -182,27 +182,28 @@ class MainActivity : ComponentActivity() {
         }
         NavHost(
             nav, startDestination = HomeRoute, modifier = Modifier.fillMaxSize().background(V.c.bg),
-            enterTransition = { slideInHorizontally(Motion.tw()) { it / 5 } + fadeIn(Motion.tw()) },
-            exitTransition = { slideOutHorizontally(Motion.tw()) { -it / 10 } + fadeOut(Motion.tw(Motion.S)) },
-            popEnterTransition = { slideInHorizontally(Motion.tw()) { -it / 10 } + fadeIn(Motion.tw()) },
-            popExitTransition = { slideOutHorizontally(Motion.tw()) { it / 5 } + fadeOut(Motion.tw(Motion.S)) },
+            // Full-width slides with opaque pages: the leaving page never shows through the arriving one.
+            enterTransition = { slideInHorizontally(androidx.compose.animation.core.tween(320, easing = androidx.compose.animation.core.FastOutSlowInEasing)) { it } },
+            exitTransition = { slideOutHorizontally(androidx.compose.animation.core.tween(320, easing = androidx.compose.animation.core.FastOutSlowInEasing)) { -it / 4 } + fadeOut(androidx.compose.animation.core.tween(320), targetAlpha = 0.6f) },
+            popEnterTransition = { slideInHorizontally(androidx.compose.animation.core.tween(320, easing = androidx.compose.animation.core.FastOutSlowInEasing)) { -it / 4 } + fadeIn(androidx.compose.animation.core.tween(320), initialAlpha = 0.6f) },
+            popExitTransition = { slideOutHorizontally(androidx.compose.animation.core.tween(320, easing = androidx.compose.animation.core.FastOutSlowInEasing)) { it } },
         ) {
-            composable<HomeRoute> { Home(nav, isAdmin) }
-            composable<DirectChatRoute> {
+            composable<HomeRoute> { Page { Home(nav, isAdmin) } }
+            composable<DirectChatRoute> { Page {
                 val r = it.arguments?.getString("peer") ?: ""
                 CompositionLocalProvider(LocalSpace provides Space.DIRECT) {
                     ChatScreen(onBack = { nav.popBackStack() }, onOpenInfo = { nav.navigate(ChatInfoRoute(r)) }, onOpenProfile = { id -> nav.navigate(ProfileRoute(id)) })
                 }
-            }
-            composable<ChatInfoRoute> {
+            } }
+            composable<ChatInfoRoute> { Page {
                 CompositionLocalProvider(LocalSpace provides Space.DIRECT) { ChatInfoScreen(onBack = { nav.popBackStack() }, onProfile = { id -> nav.navigate(ProfileRoute(id)) }) }
-            }
-            composable<ProfileRoute> {
+            } }
+            composable<ProfileRoute> { Page {
                 ProfileScreen(onBack = { nav.popBackStack() }, onMessage = { id -> nav.navigate(DirectChatRoute(id)) })
-            }
-            composable<MemberRoute> {
+            } }
+            composable<MemberRoute> { Page {
                 CompositionLocalProvider(LocalSpace provides Space.CONSOLE) { MemberScreen(onBack = { nav.popBackStack() }) }
-            }
+            } }
         }
     }
 
@@ -220,7 +221,7 @@ class MainActivity : ComponentActivity() {
                     val dir = if (targetState.ordinal > initialState.ordinal) 1 else -1
                     (fadeIn(Motion.tw(Motion.M)) + slideInHorizontally(Motion.tw()) { it / 14 * dir }) togetherWith (fadeOut(Motion.tw(Motion.S)) + slideOutHorizontally(Motion.tw()) { -it / 14 * dir })
                 }, label = "tabs") { t ->
-                    CompositionLocalProvider(LocalSpace provides t.space) {
+                    CompositionLocalProvider(LocalSpace provides t.space) { Box(Modifier.fillMaxSize().background(V.c.bg)) {
                         when (t) {
                             Tab.HALL -> ChatScreen(onBack = null, onOpenInfo = null, onOpenProfile = { nav.navigate(ProfileRoute(it)) })
                             Tab.DIRECT -> DirectListScreen(onOpen = { nav.navigate(DirectChatRoute(it)) }, onFindPeople = { tab = Tab.PEOPLE })
@@ -228,6 +229,7 @@ class MainActivity : ComponentActivity() {
                             Tab.YOU -> YouScreen()
                             Tab.CONSOLE -> ConsoleScreen(onMember = { nav.navigate(MemberRoute(it)) })
                         }
+                    }
                     }
                 }
             }
@@ -274,6 +276,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    @Composable
+    private fun Page(content: @Composable () -> Unit) {
+        // Opaque, full-size page so transitions never reveal the page underneath.
+        Box(Modifier.fillMaxSize().background(V.c.bg)) { content() }
     }
 
     companion object { const val EXTRA_PEER = "peer" }
