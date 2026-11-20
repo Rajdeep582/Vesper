@@ -6,6 +6,7 @@ import com.mongodb.kotlin.client.coroutine.MongoClient
 import com.mongodb.kotlin.client.coroutine.MongoCollection
 import com.mongodb.kotlin.client.coroutine.MongoDatabase
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.toList
 import org.bson.Document
 import java.util.Date
 import java.util.concurrent.TimeUnit
@@ -33,7 +34,17 @@ class Db(val client: MongoClient, val db: MongoDatabase) {
         val log = org.slf4j.LoggerFactory.getLogger("Db")
         suspend fun safe(name: String, block: suspend () -> Unit) = runCatching { block() }.onFailure { log.warn("index {} failed: {}", name, it.message) }
         safe("3") { users.createIndex(Indexes.ascending("u"), IndexOptions().unique(true)) }
-        safe("4") { users.createIndex( Indexes.ascending("role"), IndexOptions().unique(true).partialFilterExpression(Document("role", "admin")).name("one_admin"), ) }
+        safe("4") {
+            runCatching {
+                val existing = users.listIndexes().toList()
+                val legacy = existing.find { it.getString("name") == "one_admin" && (it.get("key") as? Document)?.containsKey("role") == true }
+                if (legacy != null) users.dropIndex("one_admin")
+            }
+            users.createIndex(
+                Indexes.ascending("admin_flag"),
+                IndexOptions().unique(true).sparse(true).name("one_admin"),
+            )
+        }
         safe("5") { devices.createIndex(Indexes.ascending("uid", "d"), IndexOptions().unique(true)) }
         safe("6") { preKeys.createIndex(Indexes.ascending("uid", "d", "k", "id"), IndexOptions().unique(true)) }
         safe("7") { refresh.createIndex(Indexes.ascending("exp"), IndexOptions().expireAfter(0, TimeUnit.SECONDS)) }

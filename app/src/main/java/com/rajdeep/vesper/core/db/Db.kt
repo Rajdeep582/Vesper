@@ -54,6 +54,7 @@ data class MessageEntity(
     val error: String? = null,
     /** Encrypted blob staged for upload (pending media) — app-private, ciphertext only. */
     val stagedBlob: String? = null,
+    val replyJson: String? = null,
 )
 
 @Entity(tableName = "users")
@@ -239,12 +240,18 @@ interface SignalDao {
     @Query("DELETE FROM sig_session WHERE name = :name") fun deleteSessionsFor(name: String)
 }
 
+val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE messages ADD COLUMN replyJson TEXT DEFAULT NULL")
+    }
+}
+
 @Database(
     entities = [
         MessageEntity::class, UserEntity::class, KvEntity::class, IdentityEntity::class, PreKeyEntity::class,
         SignedPreKeyEntity::class, KyberPreKeyEntity::class, KyberUsedEntity::class, SessionEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class VesperDatabase : RoomDatabase() {

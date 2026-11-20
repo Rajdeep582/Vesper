@@ -132,26 +132,48 @@ class Feedback(private val view: View, private val sounds: Sounds?, private val 
     fun tick() = h(HapticFeedbackConstants.CLOCK_TICK)
     fun press() = h(HapticFeedbackConstants.VIRTUAL_KEY)
     fun longPress() = h(HapticFeedbackConstants.LONG_PRESS)
-    fun recordStart() { h(HapticFeedbackConstants.LONG_PRESS); if (prefs.sounds) sounds?.play(Sounds.REC_START) }
-    fun recordStop() { h(HapticFeedbackConstants.CONFIRM); if (prefs.sounds) sounds?.play(Sounds.REC_STOP) }
+    fun recordStart() {
+        h(HapticFeedbackConstants.LONG_PRESS)
+        sounds?.play(Sounds.REC_START)
+    }
+    fun recordStop() {
+        h(HapticFeedbackConstants.CONFIRM)
+        sounds?.play(Sounds.REC_STOP)
+    }
     fun error() { h(HapticFeedbackConstants.REJECT); if (prefs.sounds) sounds?.play(Sounds.ERROR) }
 }
 
-/** Short original UI sounds via SoundPool; silent when the ringer is silent/vibrate. */
-class Sounds(ctx: android.content.Context) {
-    private val am = ctx.getSystemService(AudioManager::class.java)
-    private val pool = SoundPool.Builder().setMaxStreams(3)
-        .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+/** Short original UI sounds via SoundPool with USAGE_MEDIA so they play audibly. */
+class Sounds(private val ctx: android.content.Context) {
+    private val pool = SoundPool.Builder().setMaxStreams(4)
+        .setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build()
+        )
         .build()
-    private val ids = mapOf(
-        SEND to pool.load(ctx, R.raw.snd_send, 1), RECEIVE to pool.load(ctx, R.raw.snd_receive, 1),
-        REC_START to pool.load(ctx, R.raw.snd_record_start, 1), REC_STOP to pool.load(ctx, R.raw.snd_record_stop, 1),
-        ERROR to pool.load(ctx, R.raw.snd_error, 1),
+    private val rawRes = mapOf(
+        SEND to R.raw.snd_send,
+        RECEIVE to R.raw.snd_receive,
+        REC_START to R.raw.snd_record_start,
+        REC_STOP to R.raw.snd_record_stop,
+        ERROR to R.raw.snd_error,
     )
+    private val ids = rawRes.mapValues { pool.load(ctx, it.value, 1) }
 
     fun play(which: Int) {
-        if (am.ringerMode != AudioManager.RINGER_MODE_NORMAL) return
-        ids[which]?.let { pool.play(it, 0.35f, 0.35f, 1, 0, 1f) }
+        val id = ids[which] ?: return
+        val res = pool.play(id, 0.95f, 0.95f, 1, 0, 1f)
+        if (res == 0) {
+            val resId = rawRes[which] ?: return
+            try {
+                val mp = android.media.MediaPlayer.create(ctx, resId)
+                mp?.setOnCompletionListener { it.release() }
+                mp?.setVolume(0.95f, 0.95f)
+                mp?.start()
+            } catch (_: Throwable) {}
+        }
     }
 
     companion object { const val SEND = 0; const val RECEIVE = 1; const val REC_START = 2; const val REC_STOP = 3; const val ERROR = 4 }

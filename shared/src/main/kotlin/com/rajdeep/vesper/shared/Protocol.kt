@@ -139,7 +139,20 @@ data class MediaRef(
     val blurhash: String? = null,
 )
 
-@Serializable data class MessageBody(val text: String? = null, val media: MediaRef? = null)
+@Serializable
+data class ReplyRef(
+    val messageId: String,
+    val senderName: String,
+    val text: String? = null,
+    val kind: MessageKind = MessageKind.TEXT,
+)
+
+@Serializable
+data class MessageBody(
+    val text: String? = null,
+    val media: MediaRef? = null,
+    val reply: ReplyRef? = null,
+)
 
 /** Plaintext inside a Direct envelope. */
 @Serializable

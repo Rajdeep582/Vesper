@@ -25,6 +25,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.border
@@ -92,6 +93,7 @@ import com.rajdeep.vesper.ui.chat.ChatScreen
 import com.rajdeep.vesper.ui.chat.LocalMediaHost
 import com.rajdeep.vesper.ui.chat.MediaHost
 import com.rajdeep.vesper.ui.components.DuskGlyph
+import com.rajdeep.vesper.ui.components.SplashAnimatedMascot
 import com.rajdeep.vesper.ui.components.pressable
 import com.rajdeep.vesper.ui.console.ConsoleScreen
 import com.rajdeep.vesper.ui.console.MemberScreen
@@ -138,7 +140,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         val splash = installSplashScreen()
         super.onCreate(savedInstanceState)
-        splash.setKeepOnScreenCondition { session.state.value is SessionState.Loading }
+        splash.setKeepOnScreenCondition { false }
         enableEdgeToEdge(SystemBarStyle.dark(android.graphics.Color.TRANSPARENT), SystemBarStyle.dark(android.graphics.Color.TRANSPARENT))
         openPeer.value = intent?.getStringExtra(EXTRA_PEER)
         val host = object : MediaHost {
@@ -149,17 +151,30 @@ class MainActivity : ComponentActivity() {
         setContent {
             val prefs by settings.prefs.collectAsState(Prefs())
             val state by session.state.collectAsState()
+            var splashDone by rememberSaveable { mutableStateOf(false) }
+            val showSplash = !splashDone || state is SessionState.Loading
+
             VesperTheme(prefs) {
                 CompositionLocalProvider(LocalMediaHost provides host) {
                     AnimatedContent(
-                        when (state) { is SessionState.SignedIn -> 2; is SessionState.SignedOut -> 1; else -> 0 },
+                        targetState = when {
+                            showSplash -> 0
+                            state is SessionState.SignedIn -> 2
+                            state is SessionState.SignedOut -> 1
+                            else -> 0
+                        },
                         transitionSpec = { (fadeIn(Motion.tw(Motion.L)) + scaleIn(Motion.spring(), initialScale = 0.98f)) togetherWith fadeOut(Motion.tw(Motion.S)) },
                         label = "root",
                     ) { s ->
                         when (s) {
                             2 -> SignedIn((state as? SessionState.SignedIn)?.session?.isAdmin == true, (state as? SessionState.SignedIn)?.session?.userId)
                             1 -> AuthScreen((state as? SessionState.SignedOut)?.reason)
-                            else -> Box(Modifier.fillMaxSize().background(V.c.bg), contentAlignment = Alignment.Center) { DuskGlyph(72.dp) }
+                            else -> Box(Modifier.fillMaxSize().background(V.c.bg), contentAlignment = Alignment.Center) {
+                                SplashAnimatedMascot(
+                                    size = 90.dp,
+                                    onFinished = { splashDone = true }
+                                )
+                            }
                         }
                     }
                 }
@@ -225,6 +240,7 @@ class MainActivity : ComponentActivity() {
         androidx.activity.compose.BackHandler(enabled = tab != Tab.HALL) { tab = Tab.HALL }
         val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
         val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+        val hallListState = rememberLazyListState()
         LaunchedEffect(isAdmin) { if (tab == Tab.CONSOLE && !isAdmin) tab = Tab.HALL }
         Column(Modifier.fillMaxSize().background(V.c.bg)) {
             // The bar never hides: the keyboard simply covers it. Content consumes the bar + nav-bar height, so the chat
@@ -241,7 +257,7 @@ class MainActivity : ComponentActivity() {
                 }, label = "tabs") { t ->
                     CompositionLocalProvider(LocalSpace provides t.space) { Box(Modifier.fillMaxSize().background(V.c.bg)) {
                         when (t) {
-                            Tab.HALL -> ChatScreen(onBack = null, onOpenInfo = null, onOpenProfile = openPerson)
+                            Tab.HALL -> ChatScreen(onBack = null, onOpenInfo = null, onOpenProfile = openPerson, listState = hallListState)
                             Tab.DIRECT -> DirectListScreen(onOpen = { nav.navigate(DirectChatRoute(it)) }, onFindPeople = { tab = Tab.PEOPLE })
                             Tab.PEOPLE -> PeopleScreen(onProfile = openPerson)
                             Tab.YOU -> YouScreen()

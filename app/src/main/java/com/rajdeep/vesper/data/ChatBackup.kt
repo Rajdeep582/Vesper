@@ -36,6 +36,7 @@ private data class BackupMsg(
     val localId: String, val serverId: String?, val peerId: String?, val senderId: String, val senderName: String,
     val kind: String, val text: String?, val mediaJson: String?, val outgoing: Boolean, val createdAt: Long,
     val acceptedAt: Long?, val expiresAt: Long?, val state: Int,
+    val replyJson: String? = null,
 )
 
 /**
@@ -86,6 +87,7 @@ class ChatBackup @Inject constructor(private val api: Api, private val db: Vespe
                     senderName = b.senderName, kind = b.kind, text = b.text, mediaJson = b.mediaJson,
                     state = if (b.outgoing) b.state.coerceIn(MsgState.SENT, MsgState.READ) else MsgState.SENT,
                     outgoing = b.outgoing, createdAt = b.createdAt, acceptedAt = b.acceptedAt, expiresAt = b.expiresAt, read = true,
+                    replyJson = b.replyJson,
                 )
             }
         }
@@ -106,7 +108,7 @@ class ChatBackup @Inject constructor(private val api: Api, private val db: Vespe
     private suspend fun upload(ms: List<MessageEntity>) {
         val k = k() ?: return
         val items = ms.map { m ->
-            val b = BackupMsg(m.localId, m.serverId, m.peerId, m.senderId, m.senderName, m.kind, m.text, m.mediaJson, m.outgoing, m.createdAt, m.acceptedAt, m.expiresAt, m.state)
+            val b = BackupMsg(m.localId, m.serverId, m.peerId, m.senderId, m.senderName, m.kind, m.text, m.mediaJson, m.outgoing, m.createdAt, m.acceptedAt, m.expiresAt, m.state, m.replyJson)
             BackupItem(m.serverId!!, seal(k, VesperJson.encodeToString(BackupMsg.serializer(), b).toByteArray()), m.expiresAt!!)
         }
         items.chunked(200).forEach { api.put("/v1/backup/items", BackupItems(it), BackupItems.serializer(), Ok.serializer()) }

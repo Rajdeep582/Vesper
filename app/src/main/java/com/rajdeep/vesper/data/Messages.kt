@@ -13,6 +13,7 @@ import com.rajdeep.vesper.core.db.VesperDatabase
 import com.rajdeep.vesper.core.net.Api
 import com.rajdeep.vesper.core.net.Realtime
 import com.rajdeep.vesper.core.session.SessionManager
+import com.rajdeep.vesper.media.VoicePlayer
 import com.rajdeep.vesper.shared.Ack
 import com.rajdeep.vesper.shared.AccountEnded
 import com.rajdeep.vesper.shared.AckIds
@@ -38,6 +39,7 @@ import com.rajdeep.vesper.shared.MessageKind
 import com.rajdeep.vesper.shared.Nack
 import com.rajdeep.vesper.shared.Nacks
 import com.rajdeep.vesper.shared.Ok
+import com.rajdeep.vesper.shared.ReplyRef
 import com.rajdeep.vesper.shared.OutEnvelope
 import com.rajdeep.vesper.shared.PendingEnvelopes
 import com.rajdeep.vesper.shared.PreKeyCounts
@@ -82,6 +84,7 @@ class Messages @Inject constructor(
     private val media: MediaRepository,
     private val notifier: Notifier,
     private val backup: ChatBackup,
+    private val voicePlayer: VoicePlayer,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val dao get() = db.messages()
@@ -92,6 +95,8 @@ class Messages @Inject constructor(
     val events: SharedFlow<ChatEvent> = _events
     private val _hallMutedUntil = MutableStateFlow<Long?>(null)
     val hallMutedUntil: StateFlow<Long?> = _hallMutedUntil
+    private val _onlineCount = MutableStateFlow(1)
+    val onlineCount: StateFlow<Int> = _onlineCount
 
     val stores = RoomSignalStores(db.signal()) { session.localIdentity() }
     val cipher = SignalCipher(stores) { SignalProtocolAddress(session.current()!!.userId, session.current()!!.deviceId) }
@@ -145,29 +150,31 @@ class Messages @Inject constructor(
 
     // ------------------------------------------------------------------ sending
 
-    suspend fun sendText(scope: String, peer: String?, text: String) {
+    suspend fun sendText(scope: String, peer: String?, text: String, reply: ReplyRef? = null) {
         val t = text.trim()
         if (t.isEmpty()) return
-        (if (isForever(t)) listOf(t) else t.chunked(Limits.MAX_TEXT_CHARS)).forEach { part ->
-            insertOutgoing(scope, peer, MessageKind.TEXT, part, null, null)
+        val chunks = if (isForever(t)) listOf(t) else t.chunked(Limits.MAX_TEXT_CHARS)
+        chunks.forEachIndexed { i, part ->
+            insertOutgoing(scope, peer, MessageKind.TEXT, part, null, null, if (i == 0) reply else null)
         }
         flush()
     }
 
-    suspend fun sendMedia(scope: String, peer: String?, kind: MessageKind, plain: ByteArray, mime: String, width: Int?, height: Int?, durationMs: Long?, waveform: List<Int>?, blurhash: String?) {
+    suspend fun sendMedia(scope: String, peer: String?, kind: MessageKind, plain: ByteArray, mime: String, width: Int?, height: Int?, durationMs: Long?, waveform: List<Int>?, blurhash: String?, reply: ReplyRef? = null) {
         val staged = media.stage(plain)
         val ref = MediaRef("", staged.key.b64(), mime, staged.bytes, staged.sha256, width, height, durationMs, waveform, blurhash)
-        insertOutgoing(scope, peer, kind, null, ref, staged.cipherFile.absolutePath)
+        insertOutgoing(scope, peer, kind, null, ref, staged.cipherFile.absolutePath, reply)
         flush()
     }
 
-    private suspend fun insertOutgoing(scope: String, peer: String?, kind: MessageKind, text: String?, ref: MediaRef?, staged: String?) {
+    private suspend fun insertOutgoing(scope: String, peer: String?, kind: MessageKind, text: String?, ref: MediaRef?, staged: String?, reply: ReplyRef? = null) {
         val s = me()
         if (scope == Scope.DIRECT && peer != null) rememberContact(peer, session.now())
         dao.upsert(
             MessageEntity(
                 localId = newCmid(), scope = scope, peerId = peer, senderId = s.userId, senderName = s.username,
                 kind = kind.name, text = text, mediaJson = ref?.let { VesperJson.encodeToString(MediaRef.serializer(), it) },
+                replyJson = reply?.let { VesperJson.encodeToString(ReplyRef.serializer(), it) },
                 state = MsgState.PENDING, outgoing = true, createdAt = session.now(), stagedBlob = staged,
             ),
         )
@@ -181,26 +188,51 @@ class Messages @Inject constructor(
 
     /** Remove messages from this phone only (others keep theirs until expiry). */
     suspend fun deleteLocal(ids: List<String>) {
+        if (ids.isEmpty()) return
         val rows = ids.mapNotNull { dao.get(it) }
-        rows.filter { it.scope == Scope.HALL }.mapNotNull { it.serverId }.forEach { db.kv().put(com.rajdeep.vesper.core.db.KvEntity("hid:$it", "1")) }
-        rows.forEach { media.purgeStaged(it.stagedBlob) }
-        backup.forget(rows.filter { it.scope == Scope.DIRECT }.mapNotNull { it.serverId })
+        val mediaIds = rows.mapNotNull { r -> r.mediaJson?.let { runCatching { VesperJson.decodeFromString(MediaRef.serializer(), it).mediaId.ifEmpty { null } }.getOrNull() } }
+        if (voicePlayer.state.value.id in mediaIds) {
+            voicePlayer.stop()
+        }
         dao.delete(ids)
+        runCatching {
+            rows.filter { it.scope == Scope.HALL }.mapNotNull { it.serverId }.forEach { db.kv().put(com.rajdeep.vesper.core.db.KvEntity("hid:$it", "1")) }
+            rows.forEach { media.purgeStaged(it.stagedBlob) }
+            media.purge(mediaIds)
+            backup.forget(rows.filter { it.scope == Scope.DIRECT }.mapNotNull { it.serverId })
+        }
     }
 
     /** Delete for everyone: Hall (own, or any for the admin) and own private messages. Removed here at once; others via frames. */
     suspend fun deleteForEveryone(ids: List<String>) {
+        if (ids.isEmpty()) return
         val rows = ids.mapNotNull { dao.get(it) }
+        val mediaIds = rows.mapNotNull { r -> r.mediaJson?.let { runCatching { VesperJson.decodeFromString(MediaRef.serializer(), it).mediaId.ifEmpty { null } }.getOrNull() } }
+        if (voicePlayer.state.value.id in mediaIds) {
+            voicePlayer.stop()
+        }
+        dao.delete(ids)
+        runCatching {
+            rows.forEach { media.purgeStaged(it.stagedBlob) }
+            media.purge(mediaIds)
+        }
         val hall = rows.filter { it.scope == Scope.HALL }.mapNotNull { it.serverId }
         val direct = rows.filter { it.scope == Scope.DIRECT && it.outgoing }.mapNotNull { it.serverId }
-        if (hall.isNotEmpty()) api.post("/v1/hall/delete", com.rajdeep.vesper.shared.BackupIds(hall), com.rajdeep.vesper.shared.BackupIds.serializer(), com.rajdeep.vesper.shared.Ok.serializer())
-        if (direct.isNotEmpty()) api.post("/v1/direct/unsend", com.rajdeep.vesper.shared.BackupIds(direct), com.rajdeep.vesper.shared.BackupIds.serializer(), com.rajdeep.vesper.shared.Ok.serializer())
-        rows.forEach { media.purgeStaged(it.stagedBlob) }
-        media.purge(rows.mapNotNull { r -> r.mediaJson?.let { VesperJson.decodeFromString(MediaRef.serializer(), it).mediaId.ifEmpty { null } } })
-        dao.delete(rows.map { it.localId })
+        if (hall.isNotEmpty()) {
+            runCatching {
+                api.post("/v1/hall/delete", com.rajdeep.vesper.shared.BackupIds(hall), com.rajdeep.vesper.shared.BackupIds.serializer(), com.rajdeep.vesper.shared.Ok.serializer())
+            }
+        }
+        if (direct.isNotEmpty()) {
+            runCatching {
+                api.post("/v1/direct/unsend", com.rajdeep.vesper.shared.BackupIds(direct), com.rajdeep.vesper.shared.BackupIds.serializer(), com.rajdeep.vesper.shared.Ok.serializer())
+            }
+        }
     }
 
-    suspend fun onlineCount(): Int = api.get("/v1/online", com.rajdeep.vesper.shared.OnlineCount.serializer()).count
+    suspend fun onlineCount(): Int = api.get("/v1/online", com.rajdeep.vesper.shared.OnlineCount.serializer()).count.also {
+        _onlineCount.value = it
+    }
 
     fun flushAsync() { scope.launch { flush() } }
 
@@ -230,7 +262,8 @@ class Messages @Inject constructor(
             ref = ref.copy(mediaId = id)
             dao.setMedia(m.localId, VesperJson.encodeToString(MediaRef.serializer(), ref))
         }
-        val body = MessageBody(text = m.text, media = ref)
+        val reply = m.replyJson?.let { runCatching { VesperJson.decodeFromString(ReplyRef.serializer(), it) }.getOrNull() }
+        val body = MessageBody(text = m.text, media = ref, reply = reply)
         return if (m.scope == Scope.HALL) sendHall(m, kind, body) else sendDirect(m, kind, body)
     }
 
@@ -323,6 +356,7 @@ class Messages @Inject constructor(
             launch { runCatching { syncHall() } }
             launch { runCatching { syncDirect() }; runCatching { syncReceipts() } }
             launch { runCatching { syncContacts() } }
+            launch { runCatching { onlineCount() } }
         }
         runCatching { maintainPreKeys() }
     }
@@ -397,11 +431,15 @@ class Messages @Inject constructor(
             MessageEntity(
                 localId = "h:${m.id}", serverId = m.id, scope = Scope.HALL, senderId = m.senderId, senderName = m.senderName,
                 kind = m.kind.name, text = m.body.text, mediaJson = m.body.media?.let { VesperJson.encodeToString(MediaRef.serializer(), it) },
+                replyJson = m.body.reply?.let { VesperJson.encodeToString(ReplyRef.serializer(), it) },
                 state = MsgState.SENT, outgoing = m.senderId == s.userId, createdAt = m.acceptedAt, acceptedAt = m.acceptedAt,
                 expiresAt = m.expiresAt, seq = m.seq,
             ),
         )
-        if (live && inserted != -1L && m.senderId != s.userId) _events.tryEmit(ChatEvent.Incoming(Scope.HALL, null))
+        if (inserted != -1L && m.senderId != s.userId) {
+            if (live) _events.tryEmit(ChatEvent.Incoming(Scope.HALL, null))
+            notifier.hall(m.senderName, m.kind, m.body.text, m.id, m.expiresAt)
+        }
     }
 
     /** Decrypts and stores one envelope. Returns true when it can be acknowledged (stored or duplicate). */
@@ -429,6 +467,7 @@ class Messages @Inject constructor(
             MessageEntity(
                 localId = "d:${e.mid}", serverId = e.mid, scope = Scope.DIRECT, peerId = peer, senderId = p.fromUserId, senderName = name,
                 kind = p.kind.name, text = p.body.text, mediaJson = p.body.media?.let { VesperJson.encodeToString(MediaRef.serializer(), it) },
+                replyJson = p.body.reply?.let { VesperJson.encodeToString(ReplyRef.serializer(), it) },
                 state = MsgState.SENT, outgoing = outgoing, createdAt = e.acceptedAt, acceptedAt = e.acceptedAt, expiresAt = e.expiresAt,
                 read = outgoing || notifier.isViewing(peer),
             ),

@@ -1,0 +1,48 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Antenna Stalks -->
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="3.84"
+        android:strokeLineCap="round"
+        android:pathData="M 42.74,49.44 L 36.98,32.8" />
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="3.84"
+        android:strokeLineCap="round"
+        android:pathData="M 65.26,49.44 L 71.02,32.8" />
+
+    <!-- Antenna Tips -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M 36.98,28.0 A 4.8,4.8 0 1,1 36.97,28.0 Z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M 71.02,28.0 A 4.8,4.8 0 1,1 71.01,28.0 Z" />
+
+    <!-- Head with Eye Cutouts using evenOdd fill rule -->
+    <path
+        android:fillColor="#FF000000"
+        android:fillType="evenOdd"
+        android:pathData="M 43.97,45.6 L 64.03,45.6 A 15.57,15.57 0 0,1 79.6,61.17 L 79.6,64.63 A 15.57,15.57 0 0,1 64.03,80.2 L 43.97,80.2 A 15.57,15.57 0 0,1 28.4,64.63 L 28.4,61.17 A 15.57,15.57 0 0,1 43.97,45.6 Z M 43.25,54.52 A 7.68,7.68 0 1,1 43.24,54.52 Z M 64.75,54.52 A 7.68,7.68 0 1,1 64.74,54.52 Z" />
+
+    <!-- Pupils inside the eye cutouts -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M 44.5,57.6 A 4.0,4.0 0 1,1 44.49,57.6 Z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M 66.0,57.6 A 4.0,4.0 0 1,1 65.99,57.6 Z" />
+
+    <!-- Smile arc -->
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2.68"
+        android:strokeLineCap="round"
+        android:pathData="M 49.7,71.7 Q 54.0,74.9 58.3,71.7" />
+
+</vector>

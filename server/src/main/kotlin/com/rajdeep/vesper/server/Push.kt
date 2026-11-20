@@ -63,10 +63,37 @@ class Push(private val db: Db, cfg: Config) {
         return t
     }
 
+    private val hallWakeCooldown = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val fcmCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<Document>>>()
+
+    fun invalidateUser(uid: String) { fcmCache.remove(uid) }
+
+    fun wakeHall(uids: List<String>) {
+        if (!enabled || uids.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val toWake = uids.filter { uid ->
+            val last = hallWakeCooldown[uid] ?: 0L
+            if (now - last > 15 * 60 * 1000L) {
+                hallWakeCooldown[uid] = now
+                true
+            } else false
+        }
+        toWake.forEach { wake(it) }
+    }
+
     fun wake(uid: String) {
         if (!enabled) return
         scope.launch {
-            val devices = db.devices.find(Document("uid", uid)).toList().filter { it.str("fcm") != null }
+            val now = System.currentTimeMillis()
+            val cached = fcmCache[uid]
+            val devices = if (cached != null && now - cached.first < 2 * 60_000L) {
+                cached.second
+            } else {
+                val list = db.devices.find(Document("uid", uid)).toList().filter { it.str("fcm") != null }
+                fcmCache[uid] = now to list
+                list
+            }
+            if (devices.isEmpty()) return@launch
             val bearer = runCatching { oauthToken() }.getOrNull() ?: return@launch
             devices.forEach { d ->
                 val body = """{"message":{"token":"${d.str("fcm")}","data":{"t":"wake"},"android":{"priority":"high","ttl":"86400s"}}}"""
@@ -78,8 +105,18 @@ class Push(private val db: Db, cfg: Config) {
                         HttpResponse.BodyHandlers.ofString(),
                     )
                 }.getOrNull()
-                if (res != null && (res.statusCode() == 404 || res.body().contains("UNREGISTERED"))) {
-                    db.devices.updateOne(Document("_id", d.str("_id")), Updates.unset("fcm"))
+                if (res != null) {
+                    if (res.statusCode() == 200) {
+                        log.debug("FCM push sent to user {}: status {}", uid, res.statusCode())
+                    } else {
+                        log.warn("FCM push failed for user {}: status {} body {}", uid, res.statusCode(), res.body())
+                        if (res.statusCode() == 404 || res.body().contains("UNREGISTERED")) {
+                            fcmCache.remove(uid)
+                            db.devices.updateOne(Document("_id", d.str("_id")), Updates.unset("fcm"))
+                        }
+                    }
+                } else {
+                    log.warn("FCM push network error for user {}", uid)
                 }
             }
         }

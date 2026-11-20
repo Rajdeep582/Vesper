@@ -58,6 +58,7 @@ object AppModule {
         val pass = LocalKeys.databasePassphrase(ctx)
         return Room.databaseBuilder(ctx, VesperDatabase::class.java, "vesper.db")
             .openHelperFactory(SupportOpenHelperFactory(pass))
+            .addMigrations(com.rajdeep.vesper.core.db.MIGRATION_1_2)
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
     }

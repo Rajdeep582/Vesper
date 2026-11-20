@@ -68,7 +68,13 @@ class Realtime @Inject constructor(
         cm.registerNetworkCallback(
             NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build(),
             object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) { attempt = 0; wake.tryEmit(Unit) }
+                override fun onAvailable(network: Network) {
+                    attempt = 0
+                    scope.launch {
+                        delay(Random.nextLong(200L, 1200L))
+                        wake.tryEmit(Unit)
+                    }
+                }
             },
         )
     }

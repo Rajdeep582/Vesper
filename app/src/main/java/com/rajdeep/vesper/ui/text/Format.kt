@@ -30,12 +30,12 @@ object MessageText {
  * URLs become tappable links.
  */
 fun formatMessage(raw: String, mono: FontFamily, accent: Color, quoteColor: Color, spoilerBg: Color): AnnotatedString {
-    val text = MessageText.visible(raw)
+    val text = MessageText.visible(raw).trimEnd()
     return buildAnnotatedString {
         val lines = text.split('\n')
         var inBlock = false
         lines.forEachIndexed { li, lineRaw ->
-            var line = lineRaw
+            var line = if (inBlock) lineRaw else lineRaw.trimEnd()
             if (inBlock || line.trimStart().startsWith("```")) {
                 withStyle(SpanStyle(fontFamily = mono, background = spoilerBg.copy(alpha = 0.55f))) { append(line.replace("```", "")) }
                 if (Regex("```").findAll(line).count() % 2 == 1) inBlock = !inBlock

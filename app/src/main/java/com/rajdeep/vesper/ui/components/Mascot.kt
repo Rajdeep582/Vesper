@@ -110,3 +110,73 @@ fun HallMascot(size: Dp = 30.dp, modifier: Modifier = Modifier) {
         }
     }
 }
+
+/**
+ * Initial loading screen mascot: plays a single, smooth sequence on startup.
+ * The mascot moves one ear slightly to the side with a natural bounce,
+ * blinks its eyes exactly once, and completes so the application loads normally.
+ */
+@Composable
+fun SplashAnimatedMascot(
+    size: Dp = 90.dp,
+    modifier: Modifier = Modifier,
+    onFinished: () -> Unit = {},
+) {
+    val body = V.c.hall
+    val dark = lerp(body, Color.Black, 0.55f)
+    val eyeWhite = V.c.bg
+
+    val earTilt = remember { Animatable(0f) }
+    val blink = remember { Animatable(1f) }
+
+    LaunchedEffect(Unit) {
+        delay(180)
+        // Ear movement: right ear moves slightly to the side and bounces back
+        earTilt.animateTo(1f, spring(dampingRatio = 0.55f, stiffness = 380f))
+        delay(80)
+        earTilt.animateTo(0f, spring(dampingRatio = 0.65f, stiffness = 280f))
+        delay(60)
+        // Blink eyes exactly once
+        blink.animateTo(0.08f, tween(90, easing = androidx.compose.animation.core.FastOutSlowInEasing))
+        blink.animateTo(1f, tween(130, easing = androidx.compose.animation.core.FastOutSlowInEasing))
+        delay(220)
+        onFinished()
+    }
+
+    Canvas(modifier.size(size)) {
+        val w = this.size.width; val h = this.size.height
+        val headW = w * 0.80f; val headH = h * 0.54f
+        val left = (w - headW) / 2f; val top = h - headH - h * 0.06f
+        val stroke = w * 0.06f
+        // antennae (ears)
+        listOf(-1f, 1f).forEach { side ->
+            val base = Offset(w / 2f + side * headW * 0.22f, top + stroke)
+            // One ear (side == 1f, right ear) tilts and wiggles to the side
+            val earShift = if (side == 1f) earTilt.value * w * 0.10f else 0f
+            val earLift = if (side == 1f) -earTilt.value * h * 0.035f else 0f
+            val tip = Offset(base.x + side * w * 0.09f + earShift, (top - h * 0.20f + earLift).coerceAtLeast(w * 0.09f))
+            drawLine(dark, base, tip, stroke, StrokeCap.Round)
+            drawCircle(body, w * 0.075f, tip)
+        }
+        // head with soft top light
+        drawRoundRect(
+            Brush.verticalGradient(listOf(lerp(body, Color.White, 0.18f), body), startY = top, endY = top + headH),
+            Offset(left, top), Size(headW, headH), CornerRadius(headH * 0.45f),
+        )
+        // eyes
+        val eyeR = headW * 0.15f
+        val eyeY = top + headH * 0.48f
+        listOf(-1f, 1f).forEach { side ->
+            val c = Offset(w / 2f + side * headW * 0.21f, eyeY)
+            val eh = eyeR * 2f * blink.value
+            drawRoundRect(eyeWhite, Offset(c.x - eyeR, c.y - eh / 2f), Size(eyeR * 2f, eh.coerceAtLeast(1f)), CornerRadius(eyeR))
+            if (blink.value > 0.35f) {
+                val p = Offset(c.x, c.y)
+                drawCircle(body, eyeR * 0.52f, p)
+                drawCircle(Color.White.copy(alpha = 0.85f), eyeR * 0.16f, p + Offset(-eyeR * 0.18f, -eyeR * 0.18f))
+            }
+        }
+        // tiny smile
+        drawArc(dark, 20f, 140f, false, Offset(w / 2f - headW * 0.09f, top + headH * 0.66f), Size(headW * 0.18f, headH * 0.14f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke * 0.7f, cap = StrokeCap.Round))
+    }
+}

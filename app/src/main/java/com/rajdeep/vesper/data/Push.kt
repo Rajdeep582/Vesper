@@ -21,7 +21,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -72,9 +74,28 @@ class PushRegistrar @Inject constructor(
 @AndroidEntryPoint
 class PushService : FirebaseMessagingService() {
     @Inject lateinit var registrar: PushRegistrar
+    @Inject lateinit var messages: Messages
+    @Inject lateinit var session: SessionManager
+    @Inject lateinit var expiry: Expiry
 
     override fun onMessageReceived(message: RemoteMessage) {
-        if (message.data["t"] == "wake") PushRegistrar.wake(applicationContext)
+        if (message.data["t"] == "wake") {
+            runCatching {
+                runBlocking(Dispatchers.IO) {
+                    withTimeoutOrNull(15_000L) {
+                        if (session.current() == null) session.load()
+                        if (session.current() != null) {
+                            kotlinx.coroutines.coroutineScope {
+                                launch { messages.syncDirect() }
+                                launch { messages.syncHall() }
+                            }
+                            expiry.sweep()
+                        }
+                    }
+                }
+            }
+            PushRegistrar.wake(applicationContext)
+        }
     }
 
     override fun onNewToken(token: String) = registrar.register(token)

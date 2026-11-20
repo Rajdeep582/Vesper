@@ -96,7 +96,7 @@ class Services(val cfg: Config, val db: Db) {
     val media = MediaService(db, cfg, store)
     val accounts = Accounts(db, cfg, tokens, hub, activity, media)
     val push = Push(db, cfg)
-    val hall = Hall(db, hub, atRest, media, activity, names)
+    val hall = Hall(db, hub, atRest, media, activity, names, push)
     val direct = Direct(db, hub, media, activity, accounts, names, push)
     val keepAlive = KeepAlive()
     val sweeper = Sweeper(db, media, hub)
@@ -215,7 +215,12 @@ private fun Route.memberRoutes(s: Services) {
         if (hallIds.isNotEmpty()) s.hall.delete(hallIds)
         call.respond(Ok())
     }
-    put("/me/fcm") { s.accounts.setFcm(call.caller(), call.receive<FcmToken>().token); call.respond(Ok()) }
+    put("/me/fcm") {
+        val c = call.caller()
+        s.accounts.setFcm(c, call.receive<FcmToken>().token)
+        s.push.invalidateUser(c.uid)
+        call.respond(Ok())
+    }
 
     get("/users") { call.respond(s.accounts.people(call.request.queryParameters["query"], call.request.queryParameters["cursor"])) }
     get("/users/{id}") { call.respond(s.accounts.profile(call.parameters["id"]!!)) }
@@ -233,8 +238,10 @@ private fun Route.memberRoutes(s: Services) {
     get("/direct/pending") { call.respond(s.direct.pending(call.caller())) }
     get("/backup/key") { call.respond(s.backups.key(call.caller().uid) ?: BackupKey("", 0, "")) }
     put("/backup/key") { s.backups.setKey(call.caller().uid, call.receive<BackupKey>()); call.respond(Ok()) }
+    post("/backup/key") { s.backups.setKey(call.caller().uid, call.receive<BackupKey>()); call.respond(Ok()) }
     get("/backup/items") { call.respond(s.backups.list(call.caller().uid)) }
     put("/backup/items") { s.backups.put(call.caller().uid, call.receive<BackupItems>().items); call.respond(Ok()) }
+    post("/backup/items") { s.backups.put(call.caller().uid, call.receive<BackupItems>().items); call.respond(Ok()) }
     post("/backup/delete") { s.backups.delete(call.caller().uid, call.receive<BackupIds>().ids); call.respond(Ok()) }
     get("/direct/contacts") { call.respond(s.direct.contacts(call.caller())) }
     post("/direct/unsend") { s.direct.unsend(call.caller(), call.receive<BackupIds>().ids); call.respond(Ok()) }

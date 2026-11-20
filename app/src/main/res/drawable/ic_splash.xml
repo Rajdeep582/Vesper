@@ -1,8 +1,86 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <path android:fillColor="#E2B36B" android:pathData="M54,30.5 L56.6,37.4 L64,38 L58.3,42.6 L60.2,49.8 L54,45.7 L47.8,49.8 L49.7,42.6 L44,38 L51.4,37.4 Z"/>
-    <path android:strokeColor="#ECE8E1" android:strokeWidth="4" android:strokeLineCap="round" android:fillColor="#00000000"
-        android:pathData="M36,58 L54,80 L72,58"/>
-    <path android:strokeColor="#9A968E" android:strokeWidth="2" android:strokeLineCap="round" android:fillColor="#00000000"
-        android:pathData="M30,66 Q54,52 78,66"/>
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Antenna Stalks -->
+    <!-- Left Stalk -->
+    <path
+        android:strokeColor="#FF665130"
+        android:strokeWidth="3.84"
+        android:strokeLineCap="round"
+        android:pathData="M 42.74,49.44 L 36.98,32.8" />
+    <!-- Right Stalk -->
+    <path
+        android:strokeColor="#FF665130"
+        android:strokeWidth="3.84"
+        android:strokeLineCap="round"
+        android:pathData="M 65.26,49.44 L 71.02,32.8" />
+
+    <!-- Antenna Tips -->
+    <!-- Left Tip -->
+    <path
+        android:fillColor="#FFE2B36B"
+        android:pathData="M 36.98,28.0 A 4.8,4.8 0 1,1 36.97,28.0 Z" />
+    <!-- Right Tip -->
+    <path
+        android:fillColor="#FFE2B36B"
+        android:pathData="M 71.02,28.0 A 4.8,4.8 0 1,1 71.01,28.0 Z" />
+
+    <!-- Head (Rounded Pill shape with soft vertical top light matching Mascot.kt) -->
+    <path
+        android:pathData="M 43.97,45.6 L 64.03,45.6 A 15.57,15.57 0 0,1 79.6,61.17 L 79.6,64.63 A 15.57,15.57 0 0,1 64.03,80.2 L 43.97,80.2 A 15.57,15.57 0 0,1 28.4,64.63 L 28.4,61.17 A 15.57,15.57 0 0,1 43.97,45.6 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="54"
+                android:startY="45.6"
+                android:endX="54"
+                android:endY="80.2"
+                android:type="linear">
+                <item android:color="#FFE7C186" android:offset="0.0" />
+                <item android:color="#FFE2B36B" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Eye Sockets (Dark Background #0D0E12) -->
+    <!-- Left Socket -->
+    <path
+        android:fillColor="#FF0D0E12"
+        android:pathData="M 43.25,54.52 A 7.68,7.68 0 1,1 43.24,54.52 Z" />
+    <!-- Right Socket -->
+    <path
+        android:fillColor="#FF0D0E12"
+        android:pathData="M 64.75,54.52 A 7.68,7.68 0 1,1 64.74,54.52 Z" />
+
+    <!-- Pupils (Golden Amber #E2B36B) -->
+    <!-- Left Pupil -->
+    <path
+        android:fillColor="#FFE2B36B"
+        android:pathData="M 44.5,57.6 A 4.0,4.0 0 1,1 44.49,57.6 Z" />
+    <!-- Right Pupil -->
+    <path
+        android:fillColor="#FFE2B36B"
+        android:pathData="M 66.0,57.6 A 4.0,4.0 0 1,1 65.99,57.6 Z" />
+
+    <!-- Catchlights (White Specular Shine) -->
+    <!-- Left Catchlight -->
+    <path
+        android:fillColor="#E0FFFFFF"
+        android:pathData="M 43.1,58.97 A 1.23,1.23 0 1,1 43.09,58.97 Z" />
+    <!-- Right Catchlight -->
+    <path
+        android:fillColor="#E0FFFFFF"
+        android:pathData="M 64.6,58.97 A 1.23,1.23 0 1,1 64.59,58.97 Z" />
+
+    <!-- Smile (Curved Bronze Arc) -->
+    <path
+        android:strokeColor="#FF665130"
+        android:strokeWidth="2.68"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M 49.7,71.7 Q 54.0,74.9 58.3,71.7" />
+
 </vector>

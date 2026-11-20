@@ -51,6 +51,7 @@ class Tokens(secret: String) {
     fun access(uid: String, did: Int, role: String, now: Long): Pair<String, Long> {
         val exp = now + ACCESS_TTL_MS
         val token = JWT.create().withIssuer(ISSUER)
+            .withJWTId(randomId())
             .withClaim("uid", uid).withClaim("did", did).withClaim("role", role)
             .withIssuedAt(Date(now)).withExpiresAt(Date(exp))
             .sign(alg)

@@ -13,6 +13,8 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.material.icons.automirrored.rounded.Reply
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -20,7 +22,9 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.verticalScroll
@@ -47,6 +51,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -70,6 +75,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.runtime.mutableStateOf
@@ -80,14 +86,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -162,11 +173,18 @@ class ChatViewModel @Inject constructor(
     val myName get() = session.current()?.username ?: "someone"
     val peerUser = peer?.let { people.observe(it).stateIn(viewModelScope, SharingStarted.Eagerly, null) }
     val error = MutableStateFlow<String?>(null)
-    /** Hall only: members with a live connection, refreshed every 15 s while the Hall is open. */
-    val online = MutableStateFlow(0)
+    /** Hall only: members with a live connection, synced with fast polling and instant event triggers. */
+    val online = messages.onlineCount
+    fun refreshOnline() {
+        if (peer == null) viewModelScope.launch { runCatching { messages.onlineCount() } }
+    }
     init {
         if (peer == null) viewModelScope.launch {
-            while (true) { runCatching { messages.onlineCount() }.onSuccess { online.value = it }; kotlinx.coroutines.delay(15_000) }
+            runCatching { messages.onlineCount() }
+            while (true) {
+                kotlinx.coroutines.delay(3_000)
+                runCatching { messages.onlineCount() }
+            }
         }
     }
     fun now() = session.now()
@@ -177,32 +195,67 @@ class ChatViewModel @Inject constructor(
     }
 
     fun onVisible(visible: Boolean) {
+        if (scope == Scope.HALL) {
+            notifier.viewingHall = visible
+            if (visible) {
+                notifier.cancelHall()
+                refreshOnline()
+            }
+            return
+        }
         if (peer == null) return
         notifier.viewingPeer = if (visible) peer else null
         if (visible) { notifier.cancelFor(peer); viewModelScope.launch { messages.markRead(peer) } }
     }
 
+    val replyTo = MutableStateFlow<MessageEntity?>(null)
+    fun setReply(m: MessageEntity?) { replyTo.value = m }
+    fun clearReply() { replyTo.value = null }
+
     fun markRead() { peer?.let { viewModelScope.launch { messages.markRead(it) } } }
-    fun sendText(t: String) = viewModelScope.launch { messages.sendText(scope, peer, t) }
+    fun sendText(t: String, reply: com.rajdeep.vesper.shared.ReplyRef? = null) = viewModelScope.launch {
+        val rep = reply ?: replyTo.value?.toReplyRef()
+        replyTo.value = null
+        messages.sendText(scope, peer, t, rep)
+        if (scope == Scope.HALL) refreshOnline()
+    }
     fun retry(id: String) = viewModelScope.launch { messages.retry(id) }
     fun discard(id: String) = viewModelScope.launch { messages.discard(id) }
 
-    fun sendImage(ctx: Context, uri: Uri, deleteAfter: File? = null) = viewModelScope.launch {
+    fun sendImage(ctx: Context, uri: Uri, deleteAfter: File? = null, reply: com.rajdeep.vesper.shared.ReplyRef? = null) = viewModelScope.launch {
+        val rep = reply ?: replyTo.value?.toReplyRef()
+        replyTo.value = null
         runCatching {
             val img = ImageCompressor.prepare(ctx, uri)
-            messages.sendMedia(scope, peer, MessageKind.IMAGE, img.bytes, img.mime, img.width, img.height, null, null, img.blurhash)
+            messages.sendMedia(scope, peer, MessageKind.IMAGE, img.bytes, img.mime, img.width, img.height, null, null, img.blurhash, rep)
         }.onFailure { error.value = "Couldn't prepare that photo" }
         deleteAfter?.delete()
     }
 
     fun startRecording(): Boolean = recorder.start(Limits.MAX_VOICE_MS)
+    fun pauseRecording(): Boolean = recorder.pause()
+    fun resumeRecording(): Boolean = recorder.resume()
+    fun getPreviewBytes(): ByteArray? = recorder.previewBytes()
+    fun getRecordedWaveform(): List<Int> = recorder.currentWaveform()
 
-    fun finishRecording(send: Boolean) {
-        if (!send) { recorder.cancel(); return }
-        val r = recorder.stop() ?: return
+    fun finishRecording(send: Boolean, reply: com.rajdeep.vesper.shared.ReplyRef? = null) {
+        if (!send) {
+            android.util.Log.d("ChatViewModel", "finishRecording: send=false, cancelling recorder")
+            recorder.cancel()
+            return
+        }
+        val r = recorder.stop()
+        if (r == null || r.durationMs < 1000L) {
+            android.util.Log.w("ChatViewModel", "finishRecording: recorder.stop() returned null or < 1000ms duration")
+            recorder.cancel()
+            return
+        }
+        val rep = reply ?: replyTo.value?.toReplyRef()
+        replyTo.value = null
         viewModelScope.launch {
             val bytes = withContext(Dispatchers.IO) { r.file.readBytes().also { r.file.delete() } }
-            messages.sendMedia(scope, peer, MessageKind.VOICE, bytes, "audio/ogg", null, null, r.durationMs, r.waveform, null)
+            android.util.Log.d("ChatViewModel", "finishRecording: sending ${bytes.size} bytes, duration=${r.durationMs}ms")
+            messages.sendMedia(scope, peer, MessageKind.VOICE, bytes, "audio/ogg", null, null, r.durationMs, r.waveform, null, rep)
         }
     }
 
@@ -219,7 +272,13 @@ class ChatViewModel @Inject constructor(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: (String) -> Unit, vm: ChatViewModel = hiltViewModel()) {
+fun ChatScreen(
+    onBack: (() -> Unit)?,
+    onOpenInfo: (() -> Unit)?,
+    onOpenProfile: (String) -> Unit,
+    listState: LazyListState = rememberLazyListState(),
+    vm: ChatViewModel = hiltViewModel(),
+) {
     val items by vm.items.collectAsState()
     val link by vm.link.collectAsState()
     val reach by vm.reach.collectAsState()
@@ -231,7 +290,6 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
     val online by vm.online.collectAsState()
     val ctx = LocalContext.current
     val fb = V.fb
-    val listState = rememberLazyListState()
     val now = rememberNow { vm.now() }
     var menuFor by remember { mutableStateOf<MessageEntity?>(null) }
     var infoSheet by remember { mutableStateOf<String?>(null) }
@@ -250,21 +308,42 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
     LaunchedEffect(Unit) {
         vm.events.collect { e ->
             when (e) {
-                is ChatEvent.Incoming -> if (e.scope == vm.scope && (vm.peer == null || e.peerId == vm.peer)) fb.receive()
+                is ChatEvent.Incoming -> {
+                    if (e.scope == vm.scope && (vm.peer == null || e.peerId == vm.peer)) fb.receive()
+                    if (vm.scope == Scope.HALL) vm.refreshOnline()
+                }
                 is ChatEvent.SendFailed -> fb.error()
             }
         }
     }
     val lastId = items.lastOrNull()?.localId
+    var activeLastId by remember(vm.scope, vm.peer) { mutableStateOf<String?>(null) }
     LaunchedEffect(lastId) {
         if (items.isNotEmpty()) {
-            val nearBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= items.size - 4 } ?: true
-            if (nearBottom || items.last().outgoing) listState.animateScrollToItem(items.size - 1)
+            if (activeLastId == null) {
+                // Initial load or navigation entry: display latest chat immediately without scrolling animation
+                val atStart = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+                val atEnd = !listState.canScrollForward
+                if ((atStart || atEnd) && items.size > 1) {
+                    listState.scrollToItem(items.size - 1)
+                }
+                activeLastId = lastId
+            } else if (lastId != activeLastId) {
+                // New message arrived while actively viewing the screen
+                val nearBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= items.size - 4 } ?: true
+                if (nearBottom || items.last().outgoing) {
+                    listState.animateScrollToItem(items.size - 1)
+                }
+                activeLastId = lastId
+            }
             vm.markRead()
         }
     }
 
-    val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let { vm.sendImage(ctx, it) } }
+    val replyTo by vm.replyTo.collectAsState()
+    val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri?.let { vm.sendImage(ctx, it) }
+    }
     var captureFile by remember { mutableStateOf<File?>(null) }
     val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
         val f = captureFile
@@ -300,6 +379,7 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
                             selected.clear()
                         },
                         onDelete = { fb.press(); deleteAsk = selected.toList() },
+                        onReply = if (chosen.size == 1) ({ vm.setReply(chosen.first()); selected.clear() }) else null,
                         onDetails = if (chosen.size == 1) ({ menuFor = chosen.first(); selected.clear() }) else null,
                     )
                 }
@@ -311,17 +391,28 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
             })
             val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
             val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
-            // Tap any free space in the conversation to put the keyboard away.
-            Box(Modifier.weight(1f).pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus(); keyboard?.hide() }) }) {
+            val density = LocalDensity.current
+            var composerHeightPx by remember { mutableIntStateOf(0) }
+            val composerHeight = if (composerHeightPx > 0) with(density) { composerHeightPx.toDp() } else if (replyTo != null) 124.dp else 68.dp
+            val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
+            // Chat area bounded below header/banner so overscroll never covers the heading.
+            // Messages flow behind the transparent composer down to the bottom navigation bar with a smooth fade-away.
+            Box(Modifier.weight(1f).fillMaxWidth().clipToBounds().pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus(); keyboard?.hide() }) }) {
                 if (items.isEmpty()) {
                     EmptyState(
                         title = if (vm.scope == Scope.HALL) "The Hall is quiet" else "A private space",
                         body = if (vm.scope == Scope.HALL) "Everyone on Vesper sees what's said here. Text stays 72 hours; voice and photos 24." else "End-to-end encrypted. Only the two of you can read, hear or see what's shared here.",
-                        modifier = Modifier.align(Alignment.Center),
+                        modifier = Modifier.align(Alignment.Center).padding(bottom = composerHeight / 2),
                         glyph = { if (vm.scope == Scope.HALL) DuskGlyph() else Icon(Icons.Rounded.Lock, null, tint = V.accent, modifier = Modifier.size(40.dp)) },
                     )
                 }
-                LazyColumn(state = listState, overscrollEffect = null, modifier = Modifier.fillMaxSize().then(Modifier.springOverscroll()), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 8.dp, top = 4.dp)) {
+                LazyColumn(
+                    state = listState,
+                    overscrollEffect = null,
+                    modifier = Modifier.fillMaxSize().imePadding().then(Modifier.springOverscroll()),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = composerHeight + navBottom + 12.dp, top = 4.dp),
+                ) {
                     itemsIndexed(items, key = { _, m -> m.localId }) { i, m ->
                         val prev = items.getOrNull(i - 1)
                         val next = items.getOrNull(i + 1)
@@ -340,6 +431,13 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
                                 selecting = selecting,
                                 selected = m.localId in selected,
                                 onToggle = { toggle(m) },
+                                onReply = { vm.setReply(it) },
+                                onJumpToMessage = { targetId ->
+                                    val idx = items.indexOfFirst { it.serverId == targetId || it.localId == targetId }
+                                    if (idx >= 0) {
+                                        scope.launch { listState.animateScrollToItem(idx) }
+                                    }
+                                },
                             )
                         }
                     }
@@ -353,43 +451,109 @@ fun ChatScreen(onBack: (() -> Unit)?, onOpenInfo: (() -> Unit)?, onOpenProfile: 
                         lastH = h
                     }
                 }
+
+                // Smooth gradual fade-away just before the bottom navigation bar starts
+                val fadeH = 84.dp + navBottom
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(fadeH)
+                        .background(
+                            Brush.verticalGradient(
+                                colorStops = arrayOf(
+                                    0.00f to Color.Transparent,
+                                    0.40f to Color.Transparent,
+                                    0.68f to V.c.bg.copy(alpha = 0.18f),
+                                    0.86f to V.c.bg.copy(alpha = 0.55f),
+                                    1.00f to V.c.bg,
+                                )
+                            )
+                        )
+                )
+
                 val showJump by remember { derivedStateOf { listState.canScrollForward && (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) < items.size - 6 } }
-                Reveal(showJump, modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp), enter = scaleIn(Motion.bouncy()) + fadeIn(), exit = scaleOut() + fadeOut()) {
+                Reveal(
+                    showJump,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .imePadding()
+                        .padding(end = 16.dp, bottom = composerHeight + navBottom + 12.dp),
+                    enter = scaleIn(Motion.bouncy()) + fadeIn(),
+                    exit = scaleOut() + fadeOut(),
+                ) {
                     Box(Modifier.size(42.dp).clip(CircleShape).background(V.c.s3).pressable { scope.launch { listState.animateScrollToItem(items.size - 1) } }, contentAlignment = Alignment.Center) {
                         Icon(Icons.Rounded.KeyboardArrowDown, "Jump to latest", tint = V.c.text)
                     }
                 }
-            }
-            val mutedNow = vm.scope == Scope.HALL && (muted ?: 0) > now
-            Box(Modifier.navigationBarsPadding().imePadding().graphicsLayer { alpha = if (selecting) 0.35f else 1f }) {
-                Composer(
-                    enabled = !mutedNow,
-                    disabledReason = if (mutedNow) "You're muted in the Hall" + (muted?.takeIf { it < Long.MAX_VALUE / 2 }?.let { " until " + clock(it) } ?: "") else null,
-                    placeholder = if (vm.scope == Scope.HALL) "Message the Hall" else "Private message",
-                    level = level, elapsedMs = elapsed,
-                    onSend = { raw ->
-                        val t = raw.trim()
-                        val cmd = t.substringBefore(' ').lowercase()
-                        val arg = t.substringAfter(' ', "").trim()
-                        when (cmd) {
-                            "/docs" -> infoSheet = "docs"
-                            "/about" -> infoSheet = "about"
-                            "/clear" -> confirmClear = true
-                            "/keep" -> if (arg.isNotEmpty()) vm.sendText("*$arg*forever")
-                            "/me" -> if (arg.isNotEmpty()) vm.sendText("_${vm.myName} ${arg}_")
-                            "/shrug" -> vm.sendText((if (arg.isNotEmpty()) "$arg " else "") + "¯\\_(ツ)_/¯")
-                            else -> vm.sendText(raw)
+
+                val mutedNow = vm.scope == Scope.HALL && (muted ?: 0) > now
+                Column(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .imePadding()
+                        .graphicsLayer { alpha = if (selecting) 0.35f else 1f }
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .onSizeChanged { composerHeightPx = it.height }
+                    ) {
+                        Column {
+                            androidx.compose.animation.AnimatedVisibility(
+                                visible = replyTo != null,
+                                enter = androidx.compose.animation.expandVertically(Motion.spring()) + androidx.compose.animation.fadeIn(tween(Motion.S)),
+                                exit = androidx.compose.animation.shrinkVertically(Motion.spring()) + androidx.compose.animation.fadeOut(tween(Motion.XS)),
+                            ) {
+                                replyTo?.let { target ->
+                                    ReplyPreviewBar(
+                                        reply = target,
+                                        onDismiss = {
+                                            fb.tick()
+                                            vm.clearReply()
+                                        },
+                                    )
+                                }
+                            }
+                            Composer(
+                                enabled = !mutedNow,
+                                disabledReason = if (mutedNow) "You're muted in the Hall" + (muted?.takeIf { it < Long.MAX_VALUE / 2 }?.let { " until " + clock(it) } ?: "") else null,
+                                placeholder = if (vm.scope == Scope.HALL) "Message the Hall" else "Private message",
+                                level = level, elapsedMs = elapsed,
+                                onSend = { raw ->
+                                    val trimmed = raw.trimEnd()
+                                    if (trimmed.isEmpty()) return@Composer
+                                    val t = trimmed.trim()
+                                    val cmd = t.substringBefore(' ').lowercase()
+                                    val arg = t.substringAfter(' ', "").trim()
+                                    when (cmd) {
+                                        "/docs" -> { vm.clearReply(); infoSheet = "docs" }
+                                        "/about" -> { vm.clearReply(); infoSheet = "about" }
+                                        "/clear" -> { vm.clearReply(); confirmClear = true }
+                                        "/keep" -> if (arg.isNotEmpty()) vm.sendText("*$arg*forever")
+                                        "/me" -> if (arg.isNotEmpty()) vm.sendText("_${vm.myName} ${arg}_")
+                                        "/shrug" -> vm.sendText((if (arg.isNotEmpty()) "$arg " else "") + "¯\\_(ツ)_/¯")
+                                        else -> vm.sendText(trimmed)
+                                    }
+                                },
+                                onAttach = { attachOpen = true },
+                                onRecordStart = {
+                                    if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                                        if (!pendingRecord) { pendingRecord = true; micPermission.launch(Manifest.permission.RECORD_AUDIO) }
+                                        false
+                                    } else vm.startRecording()
+                                },
+                                onRecordPause = { vm.pauseRecording() },
+                                onRecordResume = { vm.resumeRecording() },
+                                onRecordFinish = { vm.finishRecording(it) },
+                                getPreviewBytes = { vm.getPreviewBytes() },
+                                getRecordedWaveform = { vm.getRecordedWaveform() },
+                            )
                         }
-                    },
-                    onAttach = { attachOpen = true },
-                    onRecordStart = {
-                        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                            if (!pendingRecord) { pendingRecord = true; micPermission.launch(Manifest.permission.RECORD_AUDIO) }
-                            false
-                        } else vm.startRecording()
-                    },
-                    onRecordFinish = { vm.finishRecording(it) },
-                )
+                    }
+                }
             }
         }
 
@@ -637,7 +801,7 @@ private fun DeleteChoice(icon: androidx.compose.ui.graphics.vector.ImageVector, 
 }
 
 @Composable
-private fun SelectionBar(count: Int, canCopy: Boolean, onClose: () -> Unit, onCopy: () -> Unit, onDelete: () -> Unit, onDetails: (() -> Unit)?) {
+private fun SelectionBar(count: Int, canCopy: Boolean, onClose: () -> Unit, onCopy: () -> Unit, onDelete: () -> Unit, onReply: (() -> Unit)?, onDetails: (() -> Unit)?) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).height(56.dp).clip(RoundedCornerShape(28.dp))
             .background(androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(V.accent.copy(alpha = 0.16f), V.c.s2)))
@@ -655,6 +819,7 @@ private fun SelectionBar(count: Int, canCopy: Boolean, onClose: () -> Unit, onCo
             label = "count", modifier = Modifier.padding(start = 4.dp),
         ) { n -> Text(n.toString(), style = V.t.subhead.copy(fontFamily = com.rajdeep.vesper.ui.theme.Mono), color = V.accent) }
         Text(" selected", style = V.t.subhead, color = V.c.text, modifier = Modifier.weight(1f))
+        if (onReply != null) BarIcon(androidx.compose.material.icons.Icons.AutoMirrored.Rounded.Reply, "Reply", V.c.text, onReply)
         if (onDetails != null) BarIcon(Icons.Rounded.Info, "Details", V.c.text2, onDetails)
         if (canCopy) BarIcon(Icons.Rounded.ContentCopy, "Copy", V.c.text, onCopy)
         BarIcon(Icons.Rounded.Delete, "Delete", V.c.error, onDelete)

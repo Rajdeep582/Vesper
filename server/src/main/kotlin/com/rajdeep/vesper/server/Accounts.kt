@@ -47,13 +47,14 @@ class Accounts(
             db.users.insertOne(
                 doc(
                     "_id" to randomId(), "u" to cfg.adminUsername, "ph" to cfg.adminPasswordHash, "seed" to cfg.adminPasswordHash,
-                    "role" to "admin", "st" to "active", "at" to now.asDate(), "la" to now.asDate(),
+                    "role" to "admin", "admin_flag" to true, "st" to "active", "at" to now.asDate(), "la" to now.asDate(),
                 ),
             )
             log.info("Seeded the admin identity")
             return
         }
         val updates = mutableListOf<org.bson.conversions.Bson>()
+        if (admin.get("admin_flag") == null) updates += Updates.set("admin_flag", true)
         if (admin.str("u") != cfg.adminUsername) {
             check(db.users.one(Document("u", cfg.adminUsername)) == null) { "ADMIN_USERNAME is taken" }
             updates += Updates.set("u", cfg.adminUsername)
@@ -87,7 +88,13 @@ class Accounts(
         try {
             db.users.insertOne(doc("_id" to uid, "u" to u, "ph" to hash, "role" to "member", "st" to "active", "at" to now.asDate(), "la" to now.asDate()))
         } catch (e: com.mongodb.MongoWriteException) {
-            if (e.error.code == 11000) bad("username", "Already taken") else throw e
+            val msg = e.error.message.lowercase()
+            if (e.error.code == 11000 && (msg.contains("u_1") || msg.contains("username") || msg.contains(" u "))) {
+                bad("username", "Already taken")
+            } else {
+                log.error("Unexpected duplicate key error on signup: {}", e.error.message)
+                throw e
+            }
         }
         val did = registerDevice(uid, req.device)
         activity.record("signup", uid, u)

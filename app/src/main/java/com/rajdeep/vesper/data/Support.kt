@@ -42,10 +42,11 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/** Local notifications for private messages. Previews are built on-device; the push itself never carries content. */
+/** Local notifications for private messages and Hall broadcasts. Previews are built on-device; the push itself never carries content. */
 @Singleton
 class Notifier @Inject constructor(@ApplicationContext private val ctx: Context) {
     @Volatile var viewingPeer: String? = null
+    @Volatile var viewingHall: Boolean = false
     @Volatile var foreground: Boolean = false
     private val byMessage = ConcurrentHashMap<String, Pair<Int, Long>>()
 
@@ -54,16 +55,27 @@ class Notifier @Inject constructor(@ApplicationContext private val ctx: Context)
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_DIRECT, ctx.getString(R.string.channel_direct), NotificationManager.IMPORTANCE_HIGH).apply {
                 description = ctx.getString(R.string.channel_direct_desc)
+                enableVibration(true)
+                enableLights(true)
+                setShowBadge(true)
+            },
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_HALL, "Hall", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Public Hall messages"
+                enableVibration(true)
+                enableLights(true)
+                setShowBadge(true)
             },
         )
     }
 
     fun isViewing(peer: String) = foreground && viewingPeer == peer
+    fun isViewingHall() = foreground && viewingHall
 
     fun direct(peer: String, name: String, kind: MessageKind, text: String?, mid: String, expiresAt: Long) {
         if (isViewing(peer)) return
-        if (foreground) return // in-app: the Direct tab badge and sound are enough
-        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val preview = when (kind) { MessageKind.TEXT -> text?.take(120) ?: ""; MessageKind.VOICE -> "Voice message"; MessageKind.IMAGE -> "Photo" }
         val intent = PendingIntent.getActivity(
             ctx, peer.hashCode(),
@@ -77,6 +89,8 @@ class Notifier @Inject constructor(@ApplicationContext private val ctx: Context)
             .setContentTitle(name)
             .setContentText(preview)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setAutoCancel(true)
             .setGroup("direct")
             .setTimeoutAfter((expiresAt - System.currentTimeMillis()).coerceAtLeast(1000))
@@ -86,7 +100,34 @@ class Notifier @Inject constructor(@ApplicationContext private val ctx: Context)
         byMessage[mid] = id to expiresAt
     }
 
+    fun hall(name: String, kind: MessageKind, text: String?, id: String, expiresAt: Long) {
+        if (isViewingHall()) return
+        if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        val preview = when (kind) { MessageKind.TEXT -> text?.take(120) ?: ""; MessageKind.VOICE -> "Voice message"; MessageKind.IMAGE -> "Photo" }
+        val intent = PendingIntent.getActivity(
+            ctx, 7002,
+            Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val notifId = 7002
+        val n = NotificationCompat.Builder(ctx, CHANNEL_HALL)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setColor(0xFF8FA3C8.toInt())
+            .setContentTitle("Hall • $name")
+            .setContentText(preview)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setAutoCancel(true)
+            .setTimeoutAfter((expiresAt - System.currentTimeMillis()).coerceAtLeast(1000))
+            .setContentIntent(intent)
+            .build()
+        NotificationManagerCompat.from(ctx).notify(notifId, n)
+        byMessage[id] = notifId to expiresAt
+    }
+
     fun cancelFor(peer: String) = NotificationManagerCompat.from(ctx).cancel(peer.hashCode())
+    fun cancelHall() = NotificationManagerCompat.from(ctx).cancel(7002)
 
     fun cancelExpired(mids: Collection<String>) {
         mids.forEach { mid -> byMessage.remove(mid)?.let { NotificationManagerCompat.from(ctx).cancel(it.first) } }
@@ -94,7 +135,10 @@ class Notifier @Inject constructor(@ApplicationContext private val ctx: Context)
 
     fun cancelAll() = NotificationManagerCompat.from(ctx).cancelAll()
 
-    companion object { const val CHANNEL_DIRECT = "direct" }
+    companion object {
+        const val CHANNEL_DIRECT = "vesper_direct"
+        const val CHANNEL_HALL = "vesper_hall"
+    }
 }
 
 /**
@@ -152,10 +196,28 @@ class SyncWorker @AssistedInject constructor(
     private val messages: Messages,
     private val expiry: Expiry,
 ) : CoroutineWorker(ctx, params) {
+    override suspend fun getForegroundInfo(): androidx.work.ForegroundInfo {
+        val nm = applicationContext.getSystemService(NotificationManager::class.java)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(
+                NotificationChannel("sync", "Sync", NotificationManager.IMPORTANCE_MIN).apply {
+                    description = "Background synchronization"
+                },
+            )
+        }
+        val notification = NotificationCompat.Builder(applicationContext, "sync")
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("Syncing")
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .build()
+        return androidx.work.ForegroundInfo(7001, notification)
+    }
+
     override suspend fun doWork(): Result {
         if (session.current() == null) session.load()
         if (session.current() == null) return Result.success()
         runCatching { messages.syncDirect() }
+        runCatching { messages.syncHall() }
         expiry.sweep()
         return Result.success()
     }

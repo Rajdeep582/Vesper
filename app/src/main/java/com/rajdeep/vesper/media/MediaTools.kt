@@ -15,6 +15,7 @@ import androidx.media3.datasource.ByteArrayDataSource
 import androidx.media3.datasource.DataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import com.rajdeep.vesper.shared.Limits
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -138,70 +139,253 @@ object BlurHash {
 /** Opus/OGG mono voice recorder (≈24 kbps). Writes to an app-private temp file that is deleted after upload. */
 @Singleton
 class VoiceRecorder @Inject constructor(@ApplicationContext private val ctx: Context) {
-    private var recorder: MediaRecorder? = null
-    private var file: File? = null
-    private var startedAt = 0L
-    private val amps = ArrayList<Int>()
+    private var activeRecorder: MediaRecorder? = null
+    private var currentSegmentFile: File? = null
+    private val completedSegments = ArrayList<Segment>()
+    private var segmentStartedAt = 0L
+    private val allAmps = ArrayList<Int>()
+    private val currentAmps = ArrayList<Int>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var poll: Job? = null
+
     private val _level = MutableStateFlow(0f)
     val level: StateFlow<Float> = _level
     private val _elapsed = MutableStateFlow(0L)
     val elapsed: StateFlow<Long> = _elapsed
+    private val _isRecording = MutableStateFlow(false)
+    val isRecording: StateFlow<Boolean> = _isRecording
+    private val _isPaused = MutableStateFlow(false)
+    val isPaused: StateFlow<Boolean> = _isPaused
     var onMaxReached: () -> Unit = {}
 
+    private class Segment(val file: File, val durationMs: Long, val amps: List<Int>)
+
     class Result(val file: File, val durationMs: Long, val waveform: List<Int>)
+
+    private fun completedDuration(): Long = completedSegments.sumOf { it.durationMs }
 
     fun start(maxMs: Long): Boolean {
         cancel()
         val dir = File(ctx.cacheDir, "rec").apply { mkdirs() }
-        val f = File(dir, UUID.randomUUID().toString() + ".ogg")
+        val f = File(dir, "${UUID.randomUUID()}_seg0.ogg")
         val r = if (Build.VERSION.SDK_INT >= 31) MediaRecorder(ctx) else @Suppress("DEPRECATION") MediaRecorder()
-        return runCatching {
-            // VOICE_COMMUNICATION enables the platform's noise suppression / echo cancel / AGC for clearer speech.
-            r.setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+        val ok = runCatching {
+            r.setAudioSource(MediaRecorder.AudioSource.MIC)
             r.setOutputFormat(MediaRecorder.OutputFormat.OGG)
             r.setAudioEncoder(MediaRecorder.AudioEncoder.OPUS)
             r.setAudioChannels(1)
             r.setAudioSamplingRate(48_000)
-            r.setAudioEncodingBitRate(20_000) // Opus 20 kbps mono: clear speech at ~150 KB/min
+            r.setAudioEncodingBitRate(24_000)
             r.setMaxDuration(maxMs.toInt())
             r.setOnInfoListener { _, what, _ -> if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED) onMaxReached() }
             r.setOutputFile(f.absolutePath)
             r.prepare()
             r.start()
-            recorder = r; file = f; startedAt = System.currentTimeMillis(); amps.clear()
-            poll = scope.launch {
-                while (isActive) {
-                    val a = runCatching { r.maxAmplitude }.getOrDefault(0)
-                    amps += a
-                    _level.value = (a / 20000f).coerceIn(0f, 1f)
-                    _elapsed.value = System.currentTimeMillis() - startedAt
-                    delay(60)
-                }
-            }
             true
-        }.getOrElse { r.release(); f.delete(); false }
+        }.getOrElse { err ->
+            android.util.Log.w("VoiceRecorder", "Error starting with MIC, trying DEFAULT", err)
+            r.reset()
+            runCatching {
+                r.setAudioSource(MediaRecorder.AudioSource.DEFAULT)
+                r.setOutputFormat(MediaRecorder.OutputFormat.OGG)
+                r.setAudioEncoder(MediaRecorder.AudioEncoder.OPUS)
+                r.setAudioChannels(1)
+                r.setAudioSamplingRate(48_000)
+                r.setAudioEncodingBitRate(24_000)
+                r.setMaxDuration(maxMs.toInt())
+                r.setOnInfoListener { _, what, _ -> if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED) onMaxReached() }
+                r.setOutputFile(f.absolutePath)
+                r.prepare()
+                r.start()
+                true
+            }.getOrElse { err2 ->
+                android.util.Log.e("VoiceRecorder", "Failed to start MediaRecorder", err2)
+                r.release(); f.delete()
+                false
+            }
+        }
+        if (!ok) return false
+        activeRecorder = r
+        currentSegmentFile = f
+        segmentStartedAt = System.currentTimeMillis()
+        _isRecording.value = true
+        _isPaused.value = false
+        _level.value = 0f
+        _elapsed.value = 0L
+        startPolling()
+        return true
+    }
+
+    private fun startPolling() {
+        poll?.cancel()
+        poll = scope.launch {
+            while (isActive) {
+                if (!_isPaused.value) {
+                    val r = activeRecorder
+                    val a = if (r != null) runCatching { r.maxAmplitude }.getOrDefault(0) else 0
+                    currentAmps += a
+                    _level.value = (a / 20000f).coerceIn(0f, 1f)
+                    _elapsed.value = completedDuration() + (System.currentTimeMillis() - segmentStartedAt)
+                }
+                delay(60)
+            }
+        }
+    }
+
+    fun pause(): Boolean {
+        if (!_isRecording.value || _isPaused.value) return false
+        val r = activeRecorder ?: return false
+        val f = currentSegmentFile
+        poll?.cancel()
+        val dur = (System.currentTimeMillis() - segmentStartedAt).coerceAtLeast(0)
+        runCatching { r.stop() }
+        r.release()
+        activeRecorder = null
+        currentSegmentFile = null
+
+        if (f != null && f.exists() && f.length() > 0) {
+            completedSegments += Segment(f, dur, ArrayList(currentAmps))
+            allAmps.addAll(currentAmps)
+            currentAmps.clear()
+        }
+        _isPaused.value = true
+        _level.value = 0f
+        _elapsed.value = completedDuration()
+        return true
+    }
+
+    fun resume(): Boolean {
+        if (!_isRecording.value || !_isPaused.value) return false
+        val dir = File(ctx.cacheDir, "rec").apply { mkdirs() }
+        val f = File(dir, "${UUID.randomUUID()}_seg${completedSegments.size}.ogg")
+        val r = if (Build.VERSION.SDK_INT >= 31) MediaRecorder(ctx) else @Suppress("DEPRECATION") MediaRecorder()
+        val ok = runCatching {
+            r.setAudioSource(MediaRecorder.AudioSource.MIC)
+            r.setOutputFormat(MediaRecorder.OutputFormat.OGG)
+            r.setAudioEncoder(MediaRecorder.AudioEncoder.OPUS)
+            r.setAudioChannels(1)
+            r.setAudioSamplingRate(48_000)
+            r.setAudioEncodingBitRate(24_000)
+            r.setMaxDuration(Limits.MAX_VOICE_MS.toInt())
+            r.setOnInfoListener { _, what, _ -> if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED) onMaxReached() }
+            r.setOutputFile(f.absolutePath)
+            r.prepare()
+            r.start()
+            true
+        }.getOrElse { err ->
+            android.util.Log.w("VoiceRecorder", "Error resuming with MIC, trying DEFAULT", err)
+            r.reset()
+            runCatching {
+                r.setAudioSource(MediaRecorder.AudioSource.DEFAULT)
+                r.setOutputFormat(MediaRecorder.OutputFormat.OGG)
+                r.setAudioEncoder(MediaRecorder.AudioEncoder.OPUS)
+                r.setAudioChannels(1)
+                r.setAudioSamplingRate(48_000)
+                r.setAudioEncodingBitRate(24_000)
+                r.setMaxDuration(Limits.MAX_VOICE_MS.toInt())
+                r.setOnInfoListener { _, what, _ -> if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED) onMaxReached() }
+                r.setOutputFile(f.absolutePath)
+                r.prepare()
+                r.start()
+                true
+            }.getOrElse {
+                r.release(); f.delete()
+                false
+            }
+        }
+        if (!ok) return false
+        activeRecorder = r
+        currentSegmentFile = f
+        segmentStartedAt = System.currentTimeMillis()
+        currentAmps.clear()
+        _isPaused.value = false
+        startPolling()
+        return true
     }
 
     fun stop(): Result? {
-        val r = recorder ?: return null
-        val f = file
         poll?.cancel()
-        val dur = System.currentTimeMillis() - startedAt
-        val ok = runCatching { r.stop() }.isSuccess
-        r.release(); recorder = null; file = null
-        _level.value = 0f; _elapsed.value = 0
-        if (!ok || f == null || dur < 400) { f?.delete(); return null }
-        return Result(f, dur, buckets(amps, 64))
+        val r = activeRecorder
+        val f = currentSegmentFile
+        if (r != null) {
+            val dur = (System.currentTimeMillis() - segmentStartedAt).coerceAtLeast(0)
+            runCatching { r.stop() }
+            r.release()
+            activeRecorder = null
+            currentSegmentFile = null
+            if (f != null && f.exists() && f.length() > 0) {
+                completedSegments += Segment(f, dur, ArrayList(currentAmps))
+                allAmps.addAll(currentAmps)
+                currentAmps.clear()
+            }
+        }
+        val totalDur = completedDuration()
+        _isRecording.value = false
+        _isPaused.value = false
+        _level.value = 0f
+        _elapsed.value = 0L
+
+        if (completedSegments.isEmpty() || totalDur < 1000L) {
+            cancel()
+            return null
+        }
+
+        val finalFile = if (completedSegments.size == 1) {
+            completedSegments[0].file
+        } else {
+            val dir = File(ctx.cacheDir, "rec").apply { mkdirs() }
+            val merged = File(dir, "${UUID.randomUUID()}.ogg")
+            merged.outputStream().use { out ->
+                completedSegments.forEach { seg ->
+                    seg.file.inputStream().use { inp -> inp.copyTo(out) }
+                    seg.file.delete()
+                }
+            }
+            merged
+        }
+        val waveform = buckets(allAmps, 64)
+        completedSegments.clear()
+        allAmps.clear()
+        currentAmps.clear()
+        return Result(finalFile, totalDur, waveform)
     }
 
     fun cancel() {
         poll?.cancel()
-        recorder?.let { runCatching { it.stop() }; it.release() }
-        recorder = null
-        file?.delete(); file = null
-        _level.value = 0f; _elapsed.value = 0
+        activeRecorder?.let { runCatching { it.stop() }; it.release() }
+        activeRecorder = null
+        currentSegmentFile?.delete()
+        currentSegmentFile = null
+        completedSegments.forEach { it.file.delete() }
+        completedSegments.clear()
+        allAmps.clear()
+        currentAmps.clear()
+        _isRecording.value = false
+        _isPaused.value = false
+        _level.value = 0f
+        _elapsed.value = 0L
+    }
+
+    fun previewBytes(): ByteArray? {
+        if (completedSegments.isEmpty()) return null
+        return runCatching {
+            if (completedSegments.size == 1) {
+                completedSegments[0].file.readBytes()
+            } else {
+                ByteArrayOutputStream().use { bos ->
+                    completedSegments.forEach { seg ->
+                        bos.write(seg.file.readBytes())
+                    }
+                    bos.toByteArray()
+                }
+            }
+        }.getOrNull()
+    }
+
+    fun currentWaveform(): List<Int> {
+        val combined = ArrayList(allAmps)
+        combined.addAll(currentAmps)
+        return buckets(combined, 64)
     }
 
     private fun buckets(src: List<Int>, n: Int): List<Int> {
@@ -229,27 +413,57 @@ class VoicePlayer @Inject constructor(@ApplicationContext private val ctx: Conte
 
     private fun ensure(): ExoPlayer = player ?: ExoPlayer.Builder(ctx).build().also { p ->
         p.addListener(object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) { _state.value = _state.value.copy(playing = isPlaying) }
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                _state.value = _state.value.copy(playing = isPlaying)
+                if (!isPlaying) ticker?.cancel()
+            }
             override fun onPlaybackStateChanged(s: Int) {
-                if (s == Player.STATE_ENDED) { _state.value = _state.value.copy(playing = false, positionMs = 0); p.pause(); p.seekTo(0) }
-                if (s == Player.STATE_READY) _state.value = _state.value.copy(durationMs = p.duration.coerceAtLeast(0))
+                if (s == Player.STATE_ENDED) {
+                    ticker?.cancel()
+                    _state.value = _state.value.copy(playing = false, positionMs = 0)
+                    p.pause()
+                    p.seekTo(0)
+                }
+                if (s == Player.STATE_READY) {
+                    _state.value = _state.value.copy(durationMs = p.duration.coerceAtLeast(0))
+                }
             }
         })
         player = p
     }
 
+    private fun startTicker(p: ExoPlayer) {
+        ticker?.cancel()
+        ticker = scope.launch {
+            while (isActive) {
+                _state.value = _state.value.copy(positionMs = p.currentPosition)
+                delay(50)
+            }
+        }
+    }
+
     fun play(id: String, bytes: ByteArray, durationHint: Long) {
         val p = ensure()
-        if (_state.value.id == id) { if (p.isPlaying) p.pause() else p.play(); return }
+        if (_state.value.id == id) {
+            if (p.isPlaying) {
+                p.pause()
+                ticker?.cancel()
+            } else {
+                if (p.playbackState == Player.STATE_ENDED) {
+                    p.seekTo(0)
+                }
+                p.play()
+                startTicker(p)
+            }
+            return
+        }
         val factory = DataSource.Factory { ByteArrayDataSource(bytes) }
         p.setMediaSource(ProgressiveMediaSource.Factory(factory).createMediaSource(MediaItem.fromUri("vesper://voice/$id")))
         p.playbackParameters = PlaybackParameters(_state.value.speed)
-        p.prepare(); p.play()
+        p.prepare()
+        p.play()
         _state.value = State(id, true, 0, durationHint, _state.value.speed)
-        ticker?.cancel()
-        ticker = scope.launch {
-            while (isActive) { _state.value = _state.value.copy(positionMs = p.currentPosition); delay(50) }
-        }
+        startTicker(p)
     }
 
     fun seek(id: String, fraction: Float) {
@@ -265,5 +479,14 @@ class VoicePlayer @Inject constructor(@ApplicationContext private val ctx: Conte
         _state.value = _state.value.copy(speed = next)
     }
 
-    fun stop() { player?.stop(); ticker?.cancel(); _state.value = State(speed = _state.value.speed) }
+    fun stop() {
+        ticker?.cancel()
+        player?.stop()
+        _state.value = State(speed = _state.value.speed)
+    }
+
+    fun pause() {
+        ticker?.cancel()
+        player?.pause()
+    }
 }

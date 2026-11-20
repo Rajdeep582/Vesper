@@ -45,6 +45,7 @@ class Hall(
     private val media: MediaService,
     private val activity: ActivityLog,
     private val names: Names,
+    private val push: Push,
 ) {
     private val limiter = RateLimiter(30, 10_000)
 
@@ -100,7 +101,14 @@ class Hall(
         if (mediaId != null) media.attach(mediaId, id, exp)
         val username = user.str("u")!!
         hub.toAll(HallMsg(HallMessageDto(id, seq, c.uid, username, f.kind, f.body, now, exp, f.cmid)))
-        later { activity.record("hall", c.uid, username, kind = f.kind) }
+        later {
+            activity.record("hall", c.uid, username, kind = f.kind)
+            val offlineUsers = db.users.find(Filters.and(Filters.ne("_id", c.uid), Filters.eq("st", "active")))
+                .toList()
+                .mapNotNull { it.str("_id") }
+                .filter { !hub.isOnline(it) }
+            if (offlineUsers.isNotEmpty()) push.wakeHall(offlineUsers)
+        }
         return Ack(f.cmid, id, now, exp, seq)
     }
 
@@ -214,13 +222,13 @@ class Direct(
         envDocs.forEach { d -> hub.toDevice(d.str("toUid")!!, d.int("toD")!!, DirectEnv(envToDto(d))) }
         val toName = peer.str("u"); val fromName = me.str("u")
         later {
+            push.wake(f.toUserId)
             val (a, b) = pair.split(":")
             db.conversations.updateOne(
                 Document("_id", pair),
                 Updates.combine(Updates.setOnInsert("a", a), Updates.setOnInsert("b", b), Updates.setOnInsert("first", now.asDate()), Updates.set("last", now.asDate())),
                 UpdateOptions().upsert(true),
             )
-            if (!hub.isOnline(f.toUserId)) push.wake(f.toUserId)
             activity.record("direct", c.uid, fromName, f.toUserId, toName, f.kind)
         }
         return Ack(f.cmid, mid, now, exp)

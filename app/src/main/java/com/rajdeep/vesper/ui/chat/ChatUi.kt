@@ -1,5 +1,6 @@
 package com.rajdeep.vesper.ui.chat
 
+import kotlinx.coroutines.withTimeoutOrNull
 import com.rajdeep.vesper.ui.components.bubbleIn
 import com.rajdeep.vesper.ui.components.Reveal
 import android.graphics.BitmapFactory
@@ -19,7 +20,13 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.material.icons.automirrored.rounded.Reply
 import androidx.compose.material.icons.rounded.AllInclusive
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.ui.graphics.lerp
@@ -27,10 +34,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -53,9 +63,11 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Done
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Pause
@@ -73,6 +85,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -89,13 +102,17 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import com.rajdeep.vesper.core.db.MessageEntity
 import com.rajdeep.vesper.core.db.MsgState
 import com.rajdeep.vesper.core.db.Scope
@@ -129,6 +146,14 @@ interface MediaHost {
 val LocalMediaHost = staticCompositionLocalOf<MediaHost> { error("no media host") }
 
 val MessageEntity.ref: MediaRef? get() = mediaJson?.let { runCatching { VesperJson.decodeFromString(MediaRef.serializer(), it) }.getOrNull() }
+val MessageEntity.replyRef: com.rajdeep.vesper.shared.ReplyRef? get() = replyJson?.let { runCatching { VesperJson.decodeFromString(com.rajdeep.vesper.shared.ReplyRef.serializer(), it) }.getOrNull() }
+
+fun MessageEntity.toReplyRef(): com.rajdeep.vesper.shared.ReplyRef = com.rajdeep.vesper.shared.ReplyRef(
+    messageId = serverId ?: localId,
+    senderName = senderName,
+    text = text,
+    kind = MessageKind.valueOf(kind),
+)
 
 private val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
 fun clock(ms: Long): String = timeFmt.format(Date(ms))
@@ -156,6 +181,8 @@ fun MessageBubble(
     selecting: Boolean = false,
     selected: Boolean = false,
     onToggle: () -> Unit = {},
+    onReply: ((MessageEntity) -> Unit)? = null,
+    onJumpToMessage: ((String) -> Unit)? = null,
 ) {
     if (m.state == MsgState.SYSTEM) { SystemLine(m.text ?: ""); return }
     val mine = m.outgoing
@@ -174,6 +201,43 @@ fun MessageBubble(
     val fresh = remember(m.localId) { kotlin.math.abs(System.currentTimeMillis() - m.createdAt) < 4_000 }
     val selTint by androidx.compose.animation.animateColorAsState(if (selected) V.accent.copy(alpha = 0.12f) else androidx.compose.ui.graphics.Color.Transparent, tween(Motion.M), label = "selTint")
     val pressScale by animateFloatAsState(if (selected) 0.965f else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 520f), label = "selScale")
+
+    val swipeOffset = remember { androidx.compose.animation.core.Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val fb = V.fb
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val triggerPx = with(density) { 56.dp.toPx() }
+    var triggered by remember { mutableStateOf(false) }
+
+    val draggableState = rememberDraggableState { delta ->
+        val current = swipeOffset.value
+        val maxOffset = triggerPx * 1.5f
+        val newOffset = (current + delta * 0.65f).coerceIn(-maxOffset, maxOffset)
+        scope.launch { swipeOffset.snapTo(newOffset) }
+        val passed = kotlin.math.abs(newOffset) >= triggerPx
+        if (passed && !triggered) {
+            triggered = true
+            fb.tick()
+        } else if (!passed && triggered) {
+            triggered = false
+        }
+    }
+
+    val swipeDraggable = if (onReply != null && !selecting && m.state != MsgState.FAILED) {
+        Modifier.draggable(
+            state = draggableState,
+            orientation = Orientation.Horizontal,
+            onDragStarted = { triggered = false },
+            onDragStopped = {
+                if (triggered) {
+                    fb.press()
+                    onReply(m)
+                }
+                scope.launch { swipeOffset.animateTo(0f, Motion.spring()) }
+            }
+        )
+    } else Modifier
+
     Row(
         Modifier.fillMaxWidth().background(selTint)
             .then(if (selecting) Modifier.combinedClickable(remember { MutableInteractionSource() }, null, onClick = onToggle) else Modifier)
@@ -192,37 +256,103 @@ fun MessageBubble(
             Box(Modifier.width(36.dp)) { if (!groupedWithNext) Monogram(m.senderName, 30.dp) }
         }
         val maxW = (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp * 0.76f).dp.coerceAtMost(420.dp)
-        Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start, modifier = Modifier.widthIn(max = maxW)) {
-            if (showName && !mine && !groupedWithPrev) {
-                Text(m.senderName, style = V.t.label, color = accent.copy(alpha = 0.9f), modifier = Modifier.padding(start = 6.dp, bottom = 3.dp))
-            }
-            Box(
-                Modifier.graphicsLayer { scaleX = pressScale; scaleY = pressScale }.alpha(bubbleAlpha).clip(shape).background(bg)
-                    .then(if (selected) Modifier.border(1.5.dp, V.accent.copy(alpha = 0.7f), shape) else Modifier)
-                    .combinedClickable(remember { MutableInteractionSource() }, null, onLongClick = onLongPress, onClick = { if (selecting) onToggle() else if (m.state == MsgState.FAILED) onRetry() }),
-            ) {
-                when (kind) {
-                    MessageKind.TEXT -> Column(Modifier.padding(start = 14.dp, end = 12.dp, top = 9.dp, bottom = 7.dp)) {
-                        val q2 = V.c.text2; val s3 = V.c.s3
-                        val shown = remember(m.text, accent, q2) { com.rajdeep.vesper.ui.text.formatMessage(m.text ?: "", com.rajdeep.vesper.ui.theme.Mono, accent, q2, s3) }
-                        Text(shown, style = V.t.body, color = V.c.text)
-                        Meta(m, fraction, Modifier.align(Alignment.End))
-                    }
-                    MessageKind.IMAGE -> Column {
-                        m.ref?.let { ImageContent(it, onClick = { onImage(it) }) }
-                        Meta(m, fraction, Modifier.align(Alignment.End).padding(horizontal = 10.dp, vertical = 6.dp))
-                    }
-                    MessageKind.VOICE -> Column(Modifier.padding(start = 8.dp, end = 12.dp, top = 8.dp, bottom = 6.dp)) {
-                        m.ref?.let { VoiceContent(m.localId, it, mine) }
-                        Meta(m, fraction, Modifier.align(Alignment.End))
-                    }
+        val drag = swipeOffset.value
+        val isSwiping = kotlin.math.abs(drag) > 2f
+        val swipeFraction = (kotlin.math.abs(drag) / triggerPx).coerceIn(0f, 1f)
+
+        Box(contentAlignment = if (drag >= 0) Alignment.CenterStart else Alignment.CenterEnd) {
+            if (isSwiping) {
+                val iconScale by animateFloatAsState(if (triggered) 1.25f else (swipeFraction * 0.95f), Motion.spring(), label = "replyIconScale")
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = 8.dp)
+                        .size(36.dp)
+                        .graphicsLayer {
+                            scaleX = iconScale
+                            scaleY = iconScale
+                            alpha = swipeFraction
+                        }
+                        .clip(CircleShape)
+                        .background(if (triggered) V.accent else V.c.s3),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        androidx.compose.material.icons.Icons.AutoMirrored.Rounded.Reply,
+                        contentDescription = "Reply",
+                        tint = if (triggered) V.c.onAccent else V.c.text,
+                        modifier = Modifier.size(20.dp),
+                    )
                 }
             }
-            if (m.state == MsgState.FAILED) {
-                Text(
-                    (m.error ?: "Not sent") + " · tap to retry", style = V.t.label, color = V.c.error,
-                    modifier = Modifier.padding(top = 4.dp, end = 4.dp).pressable(onClick = onRetry),
-                )
+            Column(
+                modifier = Modifier.graphicsLayer { translationX = drag },
+                horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
+            ) {
+                if (showName && !mine && !groupedWithPrev) {
+                    Text(m.senderName, style = V.t.label, color = accent.copy(alpha = 0.9f), modifier = Modifier.padding(start = 6.dp, bottom = 3.dp))
+                }
+                Box(
+                    Modifier.graphicsLayer { scaleX = pressScale; scaleY = pressScale }
+                        .alpha(bubbleAlpha)
+                        .widthIn(max = maxW)
+                        .clip(shape)
+                        .background(bg)
+                        .then(if (selected) Modifier.border(1.5.dp, V.accent.copy(alpha = 0.7f), shape) else Modifier)
+                        .then(swipeDraggable)
+                        .combinedClickable(remember { MutableInteractionSource() }, null, onLongClick = onLongPress, onClick = { if (selecting) onToggle() else if (m.state == MsgState.FAILED) onRetry() }),
+                ) {
+                    Column {
+                        m.replyRef?.let { rep ->
+                            QuotedReplyCard(rep) { onJumpToMessage?.invoke(rep.messageId) }
+                        }
+                        when (kind) {
+                            MessageKind.TEXT -> {
+                                val q2 = V.c.text2; val s3 = V.c.s3
+                                val bodyStyle = V.t.body
+                                val shown = remember(m.text, accent, q2) { com.rajdeep.vesper.ui.text.formatMessage(m.text ?: "", com.rajdeep.vesper.ui.theme.Mono, accent, q2, s3) }
+                                val textMeasurer = rememberTextMeasurer()
+                                val maxContentWidthPx = with(density) { (maxW - 26.dp).toPx() }.toInt().coerceAtLeast(1)
+                                val layout = remember(shown, maxContentWidthPx, bodyStyle) {
+                                    textMeasurer.measure(
+                                        text = shown,
+                                        style = bodyStyle,
+                                        constraints = Constraints(maxWidth = maxContentWidthPx)
+                                    )
+                                }
+                                val contentWidthDp = remember(layout, density, m.replyRef) {
+                                    val maxLineWidth = (0 until layout.lineCount)
+                                        .maxOfOrNull { layout.getLineRight(it) - layout.getLineLeft(it) } ?: 0f
+                                    val textWidthDp = with(density) { kotlin.math.ceil(maxLineWidth).toDp() } + 4.dp
+                                    val minWidth = if (m.replyRef != null) 160.dp else 64.dp
+                                    maxOf(textWidthDp, minWidth)
+                                }
+                                val bubbleWidth = (contentWidthDp + 26.dp).coerceAtMost(maxW)
+                                Column(
+                                    Modifier
+                                        .width(bubbleWidth)
+                                        .padding(start = 14.dp, end = 12.dp, top = if (m.replyRef != null) 3.dp else 9.dp, bottom = 7.dp)
+                                ) {
+                                    Text(shown, style = V.t.body, color = V.c.text)
+                                    Meta(m, fraction, Modifier.align(Alignment.End))
+                                }
+                            }
+                            MessageKind.IMAGE -> Column {
+                                m.ref?.let { ImageContent(it, onClick = { onImage(it) }) }
+                                Meta(m, fraction, Modifier.align(Alignment.End).padding(horizontal = 10.dp, vertical = 6.dp))
+                            }
+                            MessageKind.VOICE -> Column(Modifier.padding(start = 8.dp, end = 12.dp, top = if (m.replyRef != null) 3.dp else 8.dp, bottom = 6.dp)) {
+                                m.ref?.let { VoiceContent(m.localId, it, mine, onLongPress = onLongPress) }
+                                Meta(m, fraction, Modifier.align(Alignment.End))
+                            }
+                        }
+                    }
+                }
+                if (m.state == MsgState.FAILED) {
+                    Text(
+                        (m.error ?: "Not sent") + " · tap to retry", style = V.t.label, color = V.c.error,
+                        modifier = Modifier.padding(top = 4.dp, end = 4.dp).pressable(onClick = onRetry),
+                    )
+                }
             }
         }
     }
@@ -258,6 +388,128 @@ private fun Meta(m: MessageEntity, fraction: Float, modifier: Modifier = Modifie
 val SeenBlue = Color(0xFF53BDEB)
 
 @Composable
+private fun QuotedReplyCard(reply: com.rajdeep.vesper.shared.ReplyRef, onClick: () -> Unit) {
+    val accent = V.accent
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 5.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color.Black.copy(alpha = 0.22f))
+            .pressable(scaleTo = 0.98f, onClick = onClick)
+            .padding(end = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .width(3.5.dp)
+                .height(34.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(accent)
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
+            Text(
+                text = reply.senderName,
+                style = V.t.label.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
+                color = accent,
+                maxLines = 1,
+            )
+            val sub = when (reply.kind) {
+                MessageKind.TEXT -> reply.text ?: ""
+                MessageKind.VOICE -> "Voice message"
+                MessageKind.IMAGE -> "Photo"
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (reply.kind == MessageKind.VOICE) {
+                    Icon(Icons.Rounded.Mic, null, tint = V.c.text3, modifier = Modifier.size(13.dp))
+                    Spacer(Modifier.width(3.dp))
+                } else if (reply.kind == MessageKind.IMAGE) {
+                    Icon(Icons.Rounded.Image, null, tint = V.c.text3, modifier = Modifier.size(13.dp))
+                    Spacer(Modifier.width(3.dp))
+                }
+                Text(
+                    text = sub,
+                    style = V.t.caption.copy(fontSize = 11.sp),
+                    color = V.c.text2,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ReplyPreviewBar(
+    reply: MessageEntity,
+    onDismiss: () -> Unit,
+) {
+    val accent = V.accent
+    val mine = reply.outgoing
+    val name = if (mine) "You" else reply.senderName
+    val kind = MessageKind.valueOf(reply.kind)
+    val textSnippet = when (kind) {
+        MessageKind.TEXT -> reply.text ?: ""
+        MessageKind.VOICE -> "Voice message" + (reply.ref?.durationMs?.let { " (${duration(it)})" } ?: "")
+        MessageKind.IMAGE -> "Photo"
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(V.c.s2)
+            .border(0.5.dp, V.c.hairline, RoundedCornerShape(16.dp))
+            .padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .width(3.5.dp)
+                .height(34.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(accent)
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = "Replying to $name",
+                style = V.t.label.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
+                color = accent,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (kind == MessageKind.VOICE) {
+                    Icon(Icons.Rounded.Mic, null, tint = V.c.text3, modifier = Modifier.size(13.dp))
+                    Spacer(Modifier.width(3.dp))
+                } else if (kind == MessageKind.IMAGE) {
+                    Icon(Icons.Rounded.Image, null, tint = V.c.text3, modifier = Modifier.size(13.dp))
+                    Spacer(Modifier.width(3.dp))
+                }
+                Text(
+                    text = textSnippet,
+                    style = V.t.caption.copy(fontSize = 12.sp),
+                    color = V.c.text2,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Spacer(Modifier.width(6.dp))
+        Box(
+            Modifier
+                .size(30.dp)
+                .clip(CircleShape)
+                .background(V.c.s3.copy(alpha = 0.6f))
+                .pressable(onClick = onDismiss),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.Close, "Cancel reply", tint = V.c.text2, modifier = Modifier.size(16.dp))
+        }
+    }
+}
+
+@Composable
 private fun SystemLine(text: String) {
     Box(Modifier.fillMaxWidth().padding(vertical = 10.dp, horizontal = 32.dp), contentAlignment = Alignment.Center) {
         Text(text, style = V.t.label, color = V.c.text2, modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(V.c.s1).padding(horizontal = 12.dp, vertical = 7.dp))
@@ -291,8 +543,9 @@ private fun ImageContent(ref: MediaRef, onClick: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun VoiceContent(localId: String, ref: MediaRef, mine: Boolean) {
+private fun VoiceContent(localId: String, ref: MediaRef, mine: Boolean, onLongPress: (() -> Unit)? = null) {
     val host = LocalMediaHost.current
     val state by host.player.state.collectAsState()
     val active = state.id == ref.mediaId
@@ -307,13 +560,27 @@ private fun VoiceContent(localId: String, ref: MediaRef, mine: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier.size(40.dp).clip(CircleShape).background(Brush.linearGradient(listOf(accent, lerp(accent, Color.Black, 0.25f))))
-                .pressable(enabled = ref.mediaId.isNotEmpty()) {
-                    scope.launch {
-                        loading = true
-                        runCatching { host.open(ref) }.onSuccess { host.player.play(ref.mediaId, it, dur) }.onFailure { fb.error() }
-                        loading = false
-                    }
-                }.semantics { contentDescription = if (playing) "Pause voice message" else "Play voice message" },
+                .combinedClickable(
+                    enabled = ref.mediaId.isNotEmpty(),
+                    onClick = {
+                        if (playing) {
+                            fb.tick()
+                            host.player.pause()
+                        } else {
+                            scope.launch {
+                                loading = true
+                                runCatching { host.open(ref) }
+                                    .onSuccess { bytes ->
+                                        host.player.play(ref.mediaId, bytes, dur)
+                                    }
+                                    .onFailure { fb.error() }
+                                loading = false
+                            }
+                        }
+                    },
+                    onLongClick = onLongPress,
+                )
+                .semantics { contentDescription = if (playing) "Pause voice message" else "Play voice message" },
             contentAlignment = Alignment.Center,
         ) {
             AnimatedContent(if (loading) 2 else if (playing) 1 else 0, transitionSpec = { scaleIn(Motion.bouncy()) togetherWith scaleOut(tween(Motion.XS)) }, label = "play") { s ->
@@ -326,7 +593,7 @@ private fun VoiceContent(localId: String, ref: MediaRef, mine: Boolean) {
         }
         Spacer(Modifier.width(10.dp))
         Column {
-            Waveform(ref.waveform ?: List(48) { 30 }, progress, accent, V.c.text3, Modifier.width(140.dp).height(30.dp)) { f ->
+            Waveform(ref.waveform ?: List(48) { 30 }, progress, accent, V.c.text3.copy(alpha = 0.45f), Modifier.width(140.dp).height(30.dp), onLongPress = onLongPress) { f ->
                 fb.tick(); host.player.seek(ref.mediaId, f)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -344,15 +611,20 @@ private fun VoiceContent(localId: String, ref: MediaRef, mine: Boolean) {
 }
 
 @Composable
-fun Waveform(levels: List<Int>, progress: Float, active: Color, idle: Color, modifier: Modifier, onSeek: ((Float) -> Unit)? = null) {
+fun Waveform(levels: List<Int>, progress: Float, active: Color, idle: Color, modifier: Modifier, onLongPress: (() -> Unit)? = null, onSeek: ((Float) -> Unit)? = null) {
     var w by remember { mutableFloatStateOf(1f) }
     Canvas(
         modifier.then(
-            if (onSeek != null) Modifier.pointerInput(Unit) {
-                detectTapGestures { onSeek((it.x / size.width).coerceIn(0f, 1f)) }
-            }.pointerInput(Unit) {
-                detectHorizontalDragGestures { change, _ -> onSeek((change.position.x / size.width).coerceIn(0f, 1f)) }
-            } else Modifier,
+            if (onSeek != null || onLongPress != null) Modifier.pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { onSeek?.invoke((it.x / size.width).coerceIn(0f, 1f)) },
+                    onLongPress = { onLongPress?.invoke() },
+                )
+            }.then(
+                if (onSeek != null) Modifier.pointerInput(Unit) {
+                    detectHorizontalDragGestures { change, _ -> onSeek((change.position.x / size.width).coerceIn(0f, 1f)) }
+                } else Modifier
+            ) else Modifier,
         ),
     ) {
         w = size.width
@@ -374,6 +646,7 @@ sealed interface RecordUi {
     data object Idle : RecordUi
     data class Holding(val dragX: Float, val dragY: Float) : RecordUi
     data object Locked : RecordUi
+    data object Paused : RecordUi
 }
 
 @Composable
@@ -386,172 +659,706 @@ fun Composer(
     onSend: (String) -> Unit,
     onAttach: () -> Unit,
     onRecordStart: () -> Boolean,
+    onRecordPause: () -> Boolean = { false },
+    onRecordResume: () -> Boolean = { false },
     onRecordFinish: (send: Boolean) -> Unit,
+    getPreviewBytes: () -> ByteArray? = { null },
+    getRecordedWaveform: () -> List<Int> = { emptyList() },
 ) {
     var text by remember { mutableStateOf("") }
     var rec by remember { mutableStateOf<RecordUi>(RecordUi.Idle) }
+    var isTouching by remember { mutableStateOf(false) }
     val fb = V.fb
     val accent = V.accent
     val density = LocalDensity.current
-    val cancelPx = with(density) { 110.dp.toPx() }
-    val lockPx = with(density) { 90.dp.toPx() }
+    val cancelPx = with(density) { 75.dp.toPx() }
+    val lockPx = with(density) { 96.dp.toPx() }
+
+    val currentOnRecordStart by rememberUpdatedState(onRecordStart)
+    val currentOnRecordPause by rememberUpdatedState(onRecordPause)
+    val currentOnRecordResume by rememberUpdatedState(onRecordResume)
+    val currentOnRecordFinish by rememberUpdatedState(onRecordFinish)
+
+    val player = LocalMediaHost.current.player
+    val playerState by player.state.collectAsState()
+    val isPlayingPreview = playerState.id == "rec_preview" && playerState.playing
+
+    // Live audio level history for recording visualizer
+    val liveHistory = remember { ArrayDeque<Int>() }
+    LaunchedEffect(level, rec) {
+        if (rec is RecordUi.Holding || rec == RecordUi.Locked) {
+            liveHistory.addLast((level * 100).roundToInt())
+            while (liveHistory.size > 36) liveHistory.removeFirst()
+        }
+    }
+
     if (!enabled) {
-        Box(Modifier.fillMaxWidth().padding(16.dp).clip(RoundedCornerShape(18.dp)).background(V.c.s1).padding(16.dp), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier.fillMaxWidth().padding(16.dp).clip(RoundedCornerShape(18.dp)).background(V.c.s1).padding(16.dp),
+            contentAlignment = Alignment.Center,
+        ) {
             Text(disabledReason ?: "You can't send messages here right now", style = V.t.bodySmall, color = V.c.text2)
         }
         return
     }
+
     val cmdQuery = text.takeIf { it.startsWith("/") && !it.contains(' ') && !it.contains('\n') }
     val matches = cmdQuery?.let { q -> com.rajdeep.vesper.ui.text.SLASH_COMMANDS.filter { it.name.startsWith(q, ignoreCase = true) } }.orEmpty()
+
     Column(Modifier.fillMaxWidth()) {
-    com.rajdeep.vesper.ui.components.Reveal(
-        matches.isNotEmpty(),
-        enter = fadeIn(tween(Motion.S)) + androidx.compose.animation.expandVertically(Motion.spring()),
-        exit = fadeOut(tween(Motion.XS)) + androidx.compose.animation.shrinkVertically(tween(Motion.S)),
-    ) {
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 6.dp).clip(RoundedCornerShape(20.dp))
-                .background(V.c.s2).border(1.dp, accent.copy(alpha = 0.25f), RoundedCornerShape(20.dp)).padding(vertical = 6.dp),
+        com.rajdeep.vesper.ui.components.Reveal(
+            matches.isNotEmpty(),
+            enter = fadeIn(tween(Motion.S)) + androidx.compose.animation.expandVertically(Motion.spring()),
+            exit = fadeOut(tween(Motion.XS)) + androidx.compose.animation.shrinkVertically(tween(Motion.S)),
         ) {
-            matches.forEach { c ->
-                Row(
-                    Modifier.fillMaxWidth().pressable(scaleTo = 0.98f) { fb.tick(); text = c.name + if (c.args.isNotEmpty()) " " else "" }.padding(horizontal = 16.dp, vertical = 9.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(c.name, style = V.t.mono.copy(fontSize = V.t.bodySmall.fontSize, fontWeight = FontWeight.Medium), color = accent)
-                    if (c.args.isNotEmpty()) Text("  " + c.args, style = V.t.mono.copy(fontSize = V.t.label.fontSize), color = V.c.text3)
-                    Spacer(Modifier.width(12.dp))
-                    Text(c.summary, style = V.t.label, color = V.c.text2, maxLines = 1, modifier = Modifier.weight(1f))
-                }
-            }
-        }
-    }
-    Box(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            AnimatedContent(rec == RecordUi.Idle, transitionSpec = { fadeIn(tween(Motion.S)) togetherWith fadeOut(tween(Motion.XS)) }, modifier = Modifier.weight(1f), label = "composer") { idle ->
-                if (idle) {
-                    val focus = remember { MutableInteractionSource() }
-                    val focused by focus.collectIsFocusedAsState()
-                    val ring by animateColorAsState(if (focused) accent.copy(alpha = 0.55f) else V.c.hairline, tween(Motion.M), label = "ring")
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 6.dp).clip(RoundedCornerShape(20.dp))
+                    .background(V.c.s2).border(1.dp, accent.copy(alpha = 0.25f), RoundedCornerShape(20.dp)).padding(vertical = 6.dp),
+            ) {
+                matches.forEach { c ->
                     Row(
-                        Modifier.fillMaxWidth().heightIn(min = 50.dp).clip(RoundedCornerShape(25.dp))
-                            .background(Brush.verticalGradient(listOf(V.c.s2, V.c.s1)))
-                            .border(1.dp, ring, RoundedCornerShape(25.dp))
-                            .animateContentSize(Motion.spring())
-                            .padding(start = 4.dp, end = 14.dp),
+                        Modifier.fillMaxWidth().pressable(scaleTo = 0.98f) { fb.tick(); text = c.name + if (c.args.isNotEmpty()) " " else "" }.padding(horizontal = 16.dp, vertical = 9.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        IconAction(Icons.Rounded.Add, "Attach photo", tint = V.c.text2, size = 42.dp, onClick = onAttach)
-                        Box(Modifier.weight(1f).padding(vertical = 13.dp)) {
-                            if (text.isEmpty()) Text(placeholder, style = V.t.body, color = V.c.text3)
-                            BasicTextField(
-                                text, { if (it.length <= Limits.MAX_TEXT_CHARS * 3) text = it },
-                                textStyle = V.t.body.copy(color = V.c.text), cursorBrush = SolidColor(accent), maxLines = 6,
-                                interactionSource = focus,
-                                modifier = Modifier.fillMaxWidth(),
+                        Text(c.name, style = V.t.mono.copy(fontSize = V.t.bodySmall.fontSize, fontWeight = FontWeight.Medium), color = accent)
+                        if (c.args.isNotEmpty()) Text("  " + c.args, style = V.t.mono.copy(fontSize = V.t.label.fontSize), color = V.c.text3)
+                        Spacer(Modifier.width(12.dp))
+                        Text(c.summary, style = V.t.label, color = V.c.text2, maxLines = 1, modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+
+        Box(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp)) {
+            AnimatedContent(
+                targetState = when (rec) {
+                    RecordUi.Locked -> 1
+                    RecordUi.Paused -> 2
+                    else -> 0
+                },
+                transitionSpec = {
+                    (fadeIn(tween(Motion.S)) + scaleIn(Motion.spring(), initialScale = 0.95f)) togetherWith
+                        (fadeOut(tween(Motion.XS)) + scaleOut(tween(Motion.XS), targetScale = 0.95f))
+                },
+                label = "composer_bar",
+            ) { mode ->
+                when (mode) {
+                    1 -> {
+                        LockedRecordingBar(
+                            elapsedMs = elapsedMs,
+                            liveHistory = liveHistory.toList().ifEmpty { listOf(15, 30, 20) },
+                            onDelete = {
+                                fb.error()
+                                currentOnRecordFinish(false)
+                                rec = RecordUi.Idle
+                            },
+                            onPause = {
+                                fb.tick()
+                                currentOnRecordPause()
+                                rec = RecordUi.Paused
+                            },
+                            onSend = {
+                                if (elapsedMs < 1000L) {
+                                    fb.error()
+                                    currentOnRecordFinish(false)
+                                    rec = RecordUi.Idle
+                                } else {
+                                    currentOnRecordFinish(true)
+                                    fb.send()
+                                    rec = RecordUi.Idle
+                                }
+                            },
+                        )
+                    }
+                    2 -> {
+                        PausedRecordingBar(
+                            elapsedMs = elapsedMs,
+                            recordedWaveform = getRecordedWaveform().ifEmpty { liveHistory.toList().ifEmpty { listOf(20, 45, 60, 30, 75, 40, 25) } },
+                            isPlayingPreview = isPlayingPreview,
+                            previewPositionMs = playerState.positionMs,
+                            previewDurationMs = if (playerState.durationMs > 0) playerState.durationMs else elapsedMs,
+                            onTogglePreview = {
+                                fb.tick()
+                                if (isPlayingPreview) {
+                                    player.pause()
+                                } else {
+                                    val bytes = getPreviewBytes()
+                                    if (bytes != null && bytes.isNotEmpty()) {
+                                        player.play("rec_preview", bytes, elapsedMs)
+                                    }
+                                }
+                            },
+                            onDelete = {
+                                player.stop()
+                                fb.error()
+                                currentOnRecordFinish(false)
+                                rec = RecordUi.Idle
+                            },
+                            onResume = {
+                                player.stop()
+                                fb.tick()
+                                currentOnRecordResume()
+                                rec = RecordUi.Locked
+                            },
+                            onSend = {
+                                player.stop()
+                                if (elapsedMs < 1000L) {
+                                    fb.error()
+                                    currentOnRecordFinish(false)
+                                    rec = RecordUi.Idle
+                                } else {
+                                    currentOnRecordFinish(true)
+                                    fb.send()
+                                    rec = RecordUi.Idle
+                                }
+                            },
+                        )
+                    }
+                    else -> {
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            AnimatedContent(
+                                rec == RecordUi.Idle,
+                                transitionSpec = { fadeIn(tween(Motion.S)) togetherWith fadeOut(tween(Motion.XS)) },
+                                modifier = Modifier.weight(1f),
+                                label = "input_or_strip",
+                            ) { idle ->
+                                if (idle) {
+                                    val focus = remember { MutableInteractionSource() }
+                                    val focused by focus.collectIsFocusedAsState()
+                                    val ring by animateColorAsState(if (focused) accent.copy(alpha = 0.55f) else V.c.hairline, tween(Motion.M), label = "ring")
+                                    Row(
+                                        Modifier.fillMaxWidth().heightIn(min = 50.dp).clip(RoundedCornerShape(25.dp))
+                                            .background(Brush.verticalGradient(listOf(V.c.s2, V.c.s1)))
+                                            .border(1.dp, ring, RoundedCornerShape(25.dp))
+                                            .animateContentSize(Motion.spring())
+                                            .padding(start = 4.dp, end = 14.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        IconAction(Icons.Rounded.Add, "Attach photo", tint = V.c.text2, size = 42.dp, onClick = onAttach)
+                                        Box(Modifier.weight(1f).padding(vertical = 13.dp)) {
+                                            if (text.isEmpty()) Text(placeholder, style = V.t.body, color = V.c.text3)
+                                            BasicTextField(
+                                                text, { if (it.length <= Limits.MAX_TEXT_CHARS * 3) text = it },
+                                                textStyle = V.t.body.copy(color = V.c.text), cursorBrush = SolidColor(accent), maxLines = 6,
+                                                interactionSource = focus,
+                                                modifier = Modifier.fillMaxWidth(),
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    HoldingRecordingStrip(
+                                        dragX = (rec as? RecordUi.Holding)?.dragX ?: 0f,
+                                        level = level,
+                                        elapsedMs = elapsedMs,
+                                        cancelPx = cancelPx,
+                                    )
+                                }
+                            }
+
+                            Spacer(Modifier.width(8.dp))
+                            val hasText = text.isNotBlank()
+                            val holding = rec is RecordUi.Holding
+                            val grow by animateFloatAsState(
+                                when {
+                                    holding -> 1.28f
+                                    isTouching -> 1.10f
+                                    else -> 1f
+                                },
+                                androidx.compose.animation.core.spring(dampingRatio = 0.5f, stiffness = 420f),
+                                label = "grow",
                             )
+                            val halo by animateFloatAsState(if (holding) 1f + level.coerceIn(0f, 1f) * 0.85f else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.6f, stiffness = 300f), label = "halo")
+                            val dragOffset = (rec as? RecordUi.Holding)?.let {
+                                IntOffset(
+                                    (it.dragX * 0.35f).roundToInt().coerceIn(-100, 0),
+                                    (it.dragY * 0.45f).roundToInt().coerceIn(-140, 0),
+                                )
+                            } ?: IntOffset.Zero
+
+                            Box(
+                                Modifier.size(50.dp)
+                                    .semantics { contentDescription = if (hasText) "Send" else "Hold to record a voice message" }
+                                    .pointerInput(hasText) {
+                                        if (hasText) {
+                                            detectTapGestures {
+                                                fb.send()
+                                                onSend(text)
+                                                text = ""
+                                            }
+                                        } else {
+                                            awaitEachGesture {
+                                                val down = awaitFirstDown(requireUnconsumed = false)
+                                                val downUptime = android.os.SystemClock.uptimeMillis()
+                                                val activationDelayMs = 700L
+                                                val touchSlop = viewConfiguration.touchSlop
+                                                var activated = false
+                                                isTouching = true
+
+                                                try {
+                                                    while (android.os.SystemClock.uptimeMillis() - downUptime < activationDelayMs) {
+                                                        val remaining = activationDelayMs - (android.os.SystemClock.uptimeMillis() - downUptime)
+                                                        if (remaining <= 0L) {
+                                                            activated = true
+                                                            break
+                                                        }
+                                                        val event = withTimeoutOrNull(remaining) {
+                                                            awaitPointerEvent()
+                                                        }
+                                                        if (event == null) {
+                                                            activated = true
+                                                            break
+                                                        }
+                                                        val change = event.changes.firstOrNull { it.id == down.id }
+                                                        if (change == null || !change.pressed) {
+                                                            break
+                                                        }
+                                                        val currentX = change.position.x - down.position.x
+                                                        val currentY = change.position.y - down.position.y
+
+                                                        if (currentY < -lockPx) {
+                                                            fb.recordStart()
+                                                            fb.tick()
+                                                            rec = RecordUi.Locked
+                                                            withTimeoutOrNull(70L) { awaitPointerEvent() }
+                                                            if (!currentOnRecordStart()) {
+                                                                fb.error()
+                                                                rec = RecordUi.Idle
+                                                            }
+                                                            return@awaitEachGesture
+                                                        }
+                                                        if (currentX < -cancelPx) {
+                                                            fb.recordStart()
+                                                            fb.tick()
+                                                            rec = RecordUi.Paused
+                                                            withTimeoutOrNull(70L) { awaitPointerEvent() }
+                                                            if (currentOnRecordStart()) {
+                                                                currentOnRecordPause()
+                                                            } else {
+                                                                fb.error()
+                                                                rec = RecordUi.Idle
+                                                            }
+                                                            return@awaitEachGesture
+                                                        }
+                                                        if (currentY > 120f || currentX > 120f) {
+                                                            break
+                                                        }
+                                                    }
+                                                } finally {
+                                                    isTouching = false
+                                                }
+
+                                                if (!activated) {
+                                                    return@awaitEachGesture
+                                                }
+
+                                                // Play activation feedback (chime + haptics) immediately for the user
+                                                fb.recordStart()
+                                                rec = RecordUi.Holding(0f, 0f)
+
+                                                // Allow the brief (60ms) chime to finish playing through the loudspeaker
+                                                // before opening the microphone so the chime is never captured in the audio.
+                                                val earlyEvent = withTimeoutOrNull(70L) { awaitPointerEvent() }
+                                                if (earlyEvent != null) {
+                                                    val earlyChange = earlyEvent.changes.firstOrNull { it.id == down.id }
+                                                    if (earlyChange == null || !earlyChange.pressed) {
+                                                        rec = RecordUi.Idle
+                                                        return@awaitEachGesture
+                                                    }
+                                                }
+
+                                                val recordStartUptime = android.os.SystemClock.uptimeMillis()
+                                                if (!currentOnRecordStart()) {
+                                                    fb.error()
+                                                    rec = RecordUi.Idle
+                                                    return@awaitEachGesture
+                                                }
+
+                                                var lockedNow = false
+                                                var pausedNow = false
+                                                var lastX = 0f
+
+                                                while (true) {
+                                                    val event = awaitPointerEvent()
+                                                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                                    if (!change.pressed) break
+
+                                                    val currentX = change.position.x - down.position.x
+                                                    val currentY = change.position.y - down.position.y
+                                                    change.consume()
+                                                    lastX = currentX
+
+                                                    if (currentY < -lockPx) {
+                                                        fb.tick()
+                                                        rec = RecordUi.Locked
+                                                        lockedNow = true
+                                                        break
+                                                    } else if (currentX < -cancelPx) {
+                                                        fb.tick()
+                                                        currentOnRecordPause()
+                                                        rec = RecordUi.Paused
+                                                        pausedNow = true
+                                                        break
+                                                    }
+
+                                                    rec = RecordUi.Holding(currentX.coerceAtMost(0f), currentY.coerceAtMost(0f))
+                                                }
+
+                                                if (!lockedNow && !pausedNow) {
+                                                    val recordedDuration = android.os.SystemClock.uptimeMillis() - recordStartUptime
+                                                    if (lastX < -cancelPx * 0.75f) {
+                                                        fb.tick()
+                                                        currentOnRecordPause()
+                                                        rec = RecordUi.Paused
+                                                    } else if (recordedDuration < 1000L) {
+                                                        currentOnRecordFinish(false)
+                                                        rec = RecordUi.Idle
+                                                    } else {
+                                                        currentOnRecordFinish(true)
+                                                        fb.recordStop()
+                                                        rec = RecordUi.Idle
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                // Halo breathing with mic audio level
+                                Box(
+                                    Modifier.size(50.dp)
+                                        .graphicsLayer {
+                                            scaleX = halo * grow
+                                            scaleY = halo * grow
+                                            alpha = if (holding) 0.25f else 0f
+                                        }
+                                        .clip(CircleShape).background(accent),
+                                )
+                                Box(
+                                    Modifier.size(50.dp)
+                                        .offset { dragOffset }
+                                        .graphicsLayer { scaleX = grow; scaleY = grow }
+                                        .clip(CircleShape).background(Brush.linearGradient(listOf(accent, lerp(accent, Color.Black, 0.28f)))),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    AnimatedContent(
+                                        if (hasText) 1 else 0,
+                                        transitionSpec = {
+                                            (scaleIn(Motion.bouncy(), initialScale = 0.3f) + fadeIn() + androidx.compose.animation.slideInVertically(Motion.spring()) { it / 2 }) togetherWith
+                                                (scaleOut(tween(Motion.XS), targetScale = 0.3f) + fadeOut(tween(Motion.XS)))
+                                        },
+                                        label = "mic_action",
+                                    ) { s ->
+                                        val tilt by animateFloatAsState(if (s == 1) -18f else 0f, Motion.spring(), label = "tilt")
+                                        Icon(
+                                            if (s == 1) Icons.AutoMirrored.Rounded.Send else Icons.Rounded.Mic,
+                                            null,
+                                            tint = V.c.onAccent,
+                                            modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = tilt },
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
-                } else {
-                    RecordingStrip(rec, level, elapsedMs, cancelPx, onCancel = { rec = RecordUi.Idle; fb.error(); onRecordFinish(false) })
                 }
             }
-            Spacer(Modifier.width(8.dp))
-            val hasText = text.isNotBlank()
-            val locked = rec == RecordUi.Locked
-            val holding = rec is RecordUi.Holding
-            val grow by animateFloatAsState(if (holding) 1.28f else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.5f, stiffness = 420f), label = "grow")
-            val halo by animateFloatAsState(if (holding || locked) 1f + level.coerceIn(0f, 1f) * 0.9f else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.6f, stiffness = 300f), label = "halo")
-            Box(Modifier.size(50.dp), contentAlignment = Alignment.Center) {
-            // Voice halo: breathes with the mic level while recording.
-            Box(Modifier.size(50.dp).graphicsLayer { scaleX = halo * grow; scaleY = halo * grow; alpha = if (holding || locked) 0.22f else 0f }.clip(CircleShape).background(accent))
-            Box(
-                Modifier.size(50.dp)
-                    .offset { val r = rec; if (r is RecordUi.Holding) IntOffset(r.dragX.roundToInt().coerceAtMost(0), r.dragY.roundToInt().coerceAtMost(0)) else IntOffset.Zero }
-                    .graphicsLayer { scaleX = grow; scaleY = grow }
-                    .clip(CircleShape).background(Brush.linearGradient(listOf(accent, lerp(accent, Color.Black, 0.28f))))
-                    .semantics { contentDescription = if (hasText || locked) "Send" else "Hold to record a voice message" }
-                    .pointerInput(hasText, locked) {
-                        if (hasText || locked) {
-                            detectTapGestures {
-                                if (locked) { rec = RecordUi.Idle; fb.recordStop(); onRecordFinish(true) }
-                                else { fb.send(); onSend(text); text = "" }
-                            }
-                        } else {
-                            awaitEachGesture {
-                                val down = awaitFirstDown()
-                                if (!onRecordStart()) { fb.error(); return@awaitEachGesture }
-                                fb.recordStart()
-                                rec = RecordUi.Holding(0f, 0f)
-                                var lockedNow = false
-                                var cancelled = false
-                                while (true) {
-                                    val ev = awaitPointerEvent()
-                                    val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
-                                    val dx = ch.position.x - down.position.x
-                                    val dy = ch.position.y - down.position.y
-                                    if (!ch.pressed) break
-                                    if (dx < -cancelPx) { cancelled = true; break }
-                                    if (dy < -lockPx) { lockedNow = true; fb.tick(); break }
-                                    rec = RecordUi.Holding(dx, dy)
-                                    ch.consume()
-                                }
-                                when {
-                                    cancelled -> { rec = RecordUi.Idle; fb.error(); onRecordFinish(false) }
-                                    lockedNow -> rec = RecordUi.Locked
-                                    else -> { rec = RecordUi.Idle; fb.recordStop(); onRecordFinish(true) }
-                                }
-                            }
-                        }
-                    },
-                contentAlignment = Alignment.Center,
+
+            // Lock hint floats above the mic while holding.
+            Reveal(
+                rec is RecordUi.Holding,
+                modifier = Modifier.align(Alignment.TopEnd).offset(x = (-4).dp, y = (-86).dp),
+                enter = fadeIn(tween(Motion.S)) + scaleIn(Motion.spring()),
+                exit = fadeOut(tween(Motion.XS)) + scaleOut(tween(Motion.XS)),
             ) {
-                AnimatedContent(if (hasText || locked) 1 else 0, transitionSpec = {
-                    (scaleIn(Motion.bouncy(), initialScale = 0.3f) + fadeIn() + androidx.compose.animation.slideInVertically(Motion.spring()) { it / 2 }) togetherWith
-                        (scaleOut(tween(Motion.XS), targetScale = 0.3f) + fadeOut(tween(Motion.XS)))
-                }, label = "action") { s ->
-                    val tilt by animateFloatAsState(if (s == 1) -18f else 0f, Motion.spring(), label = "tilt")
-                    Icon(if (s == 1) Icons.AutoMirrored.Rounded.Send else Icons.Rounded.Mic, null, tint = V.c.onAccent, modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = tilt })
+                val dy = (rec as? RecordUi.Holding)?.dragY ?: 0f
+                val lockProgress = (-dy / lockPx).coerceIn(0f, 1f)
+                val lockBounce by animateFloatAsState(
+                    if (lockProgress >= 0.85f) 1.2f else 1f,
+                    androidx.compose.animation.core.spring(dampingRatio = 0.5f, stiffness = 400f),
+                    label = "lock_bounce",
+                )
+
+                Column(
+                    Modifier
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(V.c.s3)
+                        .border(1.dp, if (lockProgress > 0.8f) accent else V.c.hairline, RoundedCornerShape(22.dp))
+                        .padding(horizontal = 11.dp, vertical = 9.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Icon(
+                        Icons.Rounded.Lock,
+                        "Slide up to lock",
+                        tint = if (lockProgress > 0.8f) accent else V.c.text2,
+                        modifier = Modifier
+                            .size(19.dp)
+                            .graphicsLayer {
+                                scaleX = lockBounce
+                                scaleY = lockBounce
+                                translationY = -6f * lockProgress
+                            },
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Icon(
+                        Icons.Rounded.KeyboardArrowUp,
+                        null,
+                        tint = if (lockProgress > 0.8f) accent else V.c.text3,
+                        modifier = Modifier.size(14.dp),
+                    )
                 }
             }
-            }
         }
-        // Lock hint floats above the mic while holding.
-        Reveal(rec is RecordUi.Holding, modifier = Modifier.align(Alignment.TopEnd).offset(x = (-6).dp, y = (-64).dp), enter = fadeIn() + scaleIn(), exit = fadeOut() + scaleOut()) {
-            val dy = (rec as? RecordUi.Holding)?.dragY ?: 0f
-            val p = (-dy / lockPx).coerceIn(0f, 1f)
-            Column(
-                Modifier.clip(RoundedCornerShape(20.dp)).background(V.c.s3).padding(horizontal = 10.dp, vertical = 10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Icon(Icons.Rounded.Lock, "Slide up to lock", tint = if (p > 0.9f) accent else V.c.text2, modifier = Modifier.size(18.dp).offset(y = (-8 * p).dp))
-            }
-        }
-    }
     }
 }
 
 @Composable
-private fun RecordingStrip(rec: RecordUi, level: Float, elapsedMs: Long, cancelPx: Float, onCancel: () -> Unit) {
-    val dx = (rec as? RecordUi.Holding)?.dragX ?: 0f
-    val cancelP = (-dx / cancelPx).coerceIn(0f, 1f)
+private fun HoldingRecordingStrip(
+    dragX: Float,
+    level: Float,
+    elapsedMs: Long,
+    cancelPx: Float,
+) {
+    val pauseProgress = (-dragX / cancelPx).coerceIn(0f, 1f)
+    val dot by animateColorAsState(if (elapsedMs / 450 % 2 == 0L) V.c.error else V.c.error.copy(alpha = 0.3f), tween(200), label = "rec_dot")
     val history = remember { ArrayDeque<Int>() }
-    LaunchedEffect(level) { history.addLast((level * 100).roundToInt()); while (history.size > 40) history.removeFirst() }
-    val dot by animateColorAsState(if (elapsedMs / 500 % 2 == 0L) V.c.error else V.c.error.copy(alpha = 0.35f), tween(240), label = "rec")
+    LaunchedEffect(level) {
+        history.addLast((level * 100).roundToInt())
+        while (history.size > 28) history.removeFirst()
+    }
+
+    val textAlpha = (1f - pauseProgress * 1.5f).coerceIn(0f, 1f)
+    val releaseAlpha = ((pauseProgress - 0.75f) / 0.25f).coerceIn(0f, 1f)
+    val nudgeX = (dragX * 0.10f).coerceIn(-10f, 0f)
+
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 50.dp).clip(RoundedCornerShape(25.dp)).background(V.c.s2).padding(horizontal = 16.dp),
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 50.dp)
+            .clip(RoundedCornerShape(25.dp))
+            .background(V.c.s2)
+            .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(10.dp).clip(CircleShape).background(dot))
-        Spacer(Modifier.width(10.dp))
+        Spacer(Modifier.width(8.dp))
         Text(duration(elapsedMs), style = V.t.mono, color = V.c.text)
-        Spacer(Modifier.width(12.dp))
-        Waveform(history.toList().ifEmpty { listOf(0) }, 1f, V.accent.copy(alpha = 1f - cancelP * 0.7f), V.c.text3, Modifier.weight(1f).height(26.dp))
-        Spacer(Modifier.width(12.dp))
-        if (rec == RecordUi.Locked) {
-            Icon(Icons.Rounded.Stop, "Discard recording", tint = V.c.error, modifier = Modifier.size(28.dp).clip(CircleShape).pressable(onClick = onCancel))
-        } else {
-            Text("‹ slide to cancel", style = V.t.label, color = V.c.text2.copy(alpha = 1f - cancelP), modifier = Modifier.graphicsLayer { translationX = dx * 0.4f })
+        Spacer(Modifier.width(10.dp))
+        Waveform(
+            history.toList().ifEmpty { listOf(10, 20, 15) },
+            1f,
+            V.accent.copy(alpha = 1f - pauseProgress * 0.5f),
+            V.c.text3.copy(alpha = 0.5f),
+            Modifier.weight(1f).height(24.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Box(contentAlignment = Alignment.CenterEnd) {
+            if (textAlpha > 0f) {
+                Text(
+                    "‹ slide left to pause",
+                    style = V.t.caption.copy(fontSize = 11.5.sp),
+                    color = V.c.text2,
+                    maxLines = 1,
+                    modifier = Modifier.graphicsLayer {
+                        translationX = nudgeX
+                        alpha = textAlpha
+                    },
+                )
+            }
+            if (releaseAlpha > 0f) {
+                Text(
+                    "Release to pause",
+                    style = V.t.caption.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold),
+                    color = V.accent,
+                    maxLines = 1,
+                    modifier = Modifier.graphicsLayer {
+                        alpha = releaseAlpha
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LockedRecordingBar(
+    elapsedMs: Long,
+    liveHistory: List<Int>,
+    onDelete: () -> Unit,
+    onPause: () -> Unit,
+    onSend: () -> Unit,
+) {
+    val dot by animateColorAsState(if (elapsedMs / 450 % 2 == 0L) V.c.error else V.c.error.copy(alpha = 0.3f), tween(200), label = "locked_dot")
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .clip(RoundedCornerShape(26.dp))
+            .background(Brush.verticalGradient(listOf(V.c.s2, V.c.s1)))
+            .border(1.dp, V.c.hairline, RoundedCornerShape(26.dp))
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // WhatsApp-style Discard/Delete Button
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(V.c.error.copy(alpha = 0.12f))
+                .pressable(onClick = onDelete),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.Delete, contentDescription = "Discard recording", tint = V.c.error, modifier = Modifier.size(22.dp))
+        }
+
+        Spacer(Modifier.width(10.dp))
+        Box(Modifier.size(10.dp).clip(CircleShape).background(dot))
+        Spacer(Modifier.width(8.dp))
+        Text(duration(elapsedMs), style = V.t.mono, color = V.c.text)
+        Spacer(Modifier.width(10.dp))
+
+        // Live Waveform
+        Waveform(
+            liveHistory,
+            1f,
+            V.accent,
+            V.c.text3.copy(alpha = 0.4f),
+            Modifier.weight(1f).height(26.dp),
+        )
+
+        Spacer(Modifier.width(10.dp))
+
+        // Pause Recording Button
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(V.c.s3)
+                .pressable(onClick = onPause),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.Pause, contentDescription = "Pause recording", tint = V.accent, modifier = Modifier.size(22.dp))
+        }
+
+        Spacer(Modifier.width(8.dp))
+
+        // Send Button
+        Box(
+            modifier = Modifier
+                .size(46.dp)
+                .clip(CircleShape)
+                .background(Brush.linearGradient(listOf(V.accent, lerp(V.accent, Color.Black, 0.22f))))
+                .pressable(onClick = onSend),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "Send voice message", tint = V.c.onAccent, modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+@Composable
+private fun PausedRecordingBar(
+    elapsedMs: Long,
+    recordedWaveform: List<Int>,
+    isPlayingPreview: Boolean,
+    previewPositionMs: Long,
+    previewDurationMs: Long,
+    onTogglePreview: () -> Unit,
+    onDelete: () -> Unit,
+    onResume: () -> Unit,
+    onSend: () -> Unit,
+) {
+    val progress = if (isPlayingPreview && previewDurationMs > 0) {
+        (previewPositionMs.toFloat() / previewDurationMs).coerceIn(0f, 1f)
+    } else 0f
+    val displayTime = if (isPlayingPreview) previewPositionMs else elapsedMs
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .clip(RoundedCornerShape(26.dp))
+            .background(Brush.verticalGradient(listOf(V.c.s2, V.c.s1)))
+            .border(1.dp, V.c.hairline, RoundedCornerShape(26.dp))
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // WhatsApp-style Discard/Delete Button
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(V.c.error.copy(alpha = 0.12f))
+                .pressable(onClick = onDelete),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.Delete, contentDescription = "Discard recording", tint = V.c.error, modifier = Modifier.size(22.dp))
+        }
+
+        Spacer(Modifier.width(8.dp))
+
+        // Play / Pause Preview Button
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(if (isPlayingPreview) V.accent else V.c.s3)
+                .pressable(onClick = onTogglePreview),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                if (isPlayingPreview) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                contentDescription = if (isPlayingPreview) "Pause preview" else "Play preview",
+                tint = if (isPlayingPreview) V.c.onAccent else V.accent,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+
+        Spacer(Modifier.width(8.dp))
+
+        // Recorded Waveform with preview playback progress
+        val player = LocalMediaHost.current.player
+        val fb = V.fb
+        Waveform(
+            recordedWaveform,
+            progress,
+            V.accent,
+            V.c.text3.copy(alpha = 0.45f),
+            Modifier.weight(1f).height(26.dp),
+            onSeek = { f ->
+                fb.tick()
+                player.seek("rec_preview", f)
+            },
+        )
+
+        Spacer(Modifier.width(6.dp))
+        Text(duration(displayTime), style = V.t.mono, color = V.c.text)
+        Spacer(Modifier.width(8.dp))
+
+        // Resume Recording Button
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(V.c.s3)
+                .pressable(onClick = onResume),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.Mic, contentDescription = "Resume recording", tint = V.c.error, modifier = Modifier.size(22.dp))
+        }
+
+        Spacer(Modifier.width(8.dp))
+
+        // Send Button
+        Box(
+            modifier = Modifier
+                .size(46.dp)
+                .clip(CircleShape)
+                .background(Brush.linearGradient(listOf(V.accent, lerp(V.accent, Color.Black, 0.22f))))
+                .pressable(onClick = onSend),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "Send voice message", tint = V.c.onAccent, modifier = Modifier.size(20.dp))
         }
     }
 }
