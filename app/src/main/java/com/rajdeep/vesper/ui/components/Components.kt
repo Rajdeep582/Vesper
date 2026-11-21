@@ -422,12 +422,15 @@ fun Modifier.staggerIn(index: Int, key: Any? = Unit): Modifier {
 fun Modifier.bubbleIn(fresh: Boolean, mine: Boolean): Modifier {
     if (!fresh) return this
     val p = remember { androidx.compose.animation.core.Animatable(0f) }
-    androidx.compose.runtime.LaunchedEffect(Unit) { p.animateTo(1f, androidx.compose.animation.core.spring(dampingRatio = 0.72f, stiffness = 420f)) }
+    androidx.compose.runtime.LaunchedEffect(Unit) { p.animateTo(1f, androidx.compose.animation.core.spring(dampingRatio = 0.78f, stiffness = 360f)) }
     return this.graphicsLayer {
+        // Own messages rise out of the composer from the bottom-right corner; incoming ones grow from the left.
         val v = p.value
         transformOrigin = androidx.compose.ui.graphics.TransformOrigin(if (mine) 1f else 0f, 1f)
-        alpha = v.coerceIn(0f, 1f); translationY = (1f - v) * 14.dp.toPx()
-        scaleX = 0.9f + 0.1f * v; scaleY = scaleX
+        alpha = (v * 1.6f).coerceIn(0f, 1f)
+        translationY = (1f - v) * (if (mine) 28.dp else 12.dp).toPx()
+        translationX = (1f - v) * (if (mine) 10.dp else (-6).dp).toPx()
+        scaleX = 0.84f + 0.16f * v; scaleY = scaleX
     }
 }
 

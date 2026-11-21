@@ -94,6 +94,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -787,7 +788,7 @@ fun Composer(
                 label = "composer_bar",
             ) { mode ->
                 when (mode) {
-                    1 -> {
+                    1 -> androidx.compose.runtime.CompositionLocalProvider(LocalLiveLevel provides level) {
                         LockedRecordingBar(
                             elapsedMs = elapsedMs,
                             liveHistory = liveHistory.toList().ifEmpty { listOf(15, 30, 20) },
@@ -862,7 +863,10 @@ fun Composer(
                         Row(verticalAlignment = Alignment.Bottom) {
                             AnimatedContent(
                                 rec == RecordUi.Idle,
-                                transitionSpec = { fadeIn(tween(Motion.S)) togetherWith fadeOut(tween(Motion.XS)) },
+                                transitionSpec = {
+                                    if (targetState) (fadeIn(tween(Motion.M)) + scaleIn(Motion.spring(), initialScale = 0.97f)) togetherWith (fadeOut(tween(Motion.S)) + androidx.compose.animation.slideOutHorizontally(tween(Motion.S)) { it / 6 })
+                                    else (fadeIn(tween(Motion.S)) + androidx.compose.animation.slideInHorizontally(Motion.spring()) { it / 4 }) togetherWith fadeOut(tween(Motion.XS))
+                                },
                                 modifier = Modifier.weight(1f),
                                 label = "input_or_strip",
                             ) { idle ->
@@ -904,7 +908,7 @@ fun Composer(
                             val holding = rec is RecordUi.Holding
                             val grow by animateFloatAsState(
                                 when {
-                                    holding -> 1.28f
+                                    holding -> 1.38f
                                     isTouching -> 1.10f
                                     else -> 1f
                                 },
@@ -919,6 +923,16 @@ fun Composer(
                                     if (-it.dragY >= -it.dragX) (it.dragY * 0.75f).roundToInt().coerceIn(-lockPx.roundToInt(), 0) else 0,
                                 )
                             } ?: IntOffset.Zero
+                            // Smooth the finger-follow (and the snap home on release) instead of jumping per touch sample.
+                            val micOffset by androidx.compose.animation.core.animateIntOffsetAsState(
+                                dragOffset,
+                                androidx.compose.animation.core.spring(dampingRatio = 0.78f, stiffness = if (holding) 1400f else 500f),
+                                label = "micOffset",
+                            )
+                            val ripple = androidx.compose.animation.core.rememberInfiniteTransition(label = "ripple")
+                            val r1 by ripple.animateFloat(0f, 1f, androidx.compose.animation.core.infiniteRepeatable(tween(1400, easing = androidx.compose.animation.core.LinearEasing)), label = "r1")
+                            val sendFly = remember { androidx.compose.animation.core.Animatable(0f) }
+                            val flyScope = rememberCoroutineScope()
 
                             Box(
                                 Modifier.size(50.dp)
@@ -929,6 +943,8 @@ fun Composer(
                                                 fb.send()
                                                 onSend(text)
                                                 text = ""
+                                                // Paper plane takes off, a fresh one pops back in.
+                                                flyScope.launch { sendFly.snapTo(0f); sendFly.animateTo(1f, tween(320, easing = Motion.Emphasized)); sendFly.snapTo(0f) }
                                             }
                                         } else {
                                             awaitEachGesture {
@@ -1078,19 +1094,28 @@ fun Composer(
                                     },
                                 contentAlignment = Alignment.Center,
                             ) {
-                                // Halo breathing with mic audio level
+                                // Two expanding ripples while recording + a halo that breathes with the voice level.
+                                if (holding) {
+                                    listOf(r1, (r1 + 0.5f) % 1f).forEach { f ->
+                                        Box(
+                                            Modifier.size(50.dp).offset { micOffset }
+                                                .graphicsLayer { val sc = grow * (1f + f * 0.9f); scaleX = sc; scaleY = sc; alpha = (1f - f) * 0.28f }
+                                                .border(2.dp, accent, CircleShape),
+                                        )
+                                    }
+                                }
                                 Box(
-                                    Modifier.size(50.dp)
+                                    Modifier.size(50.dp).offset { micOffset }
                                         .graphicsLayer {
                                             scaleX = halo * grow
                                             scaleY = halo * grow
-                                            alpha = if (holding) 0.25f else 0f
+                                            alpha = if (holding) 0.22f else 0f
                                         }
                                         .clip(CircleShape).background(accent),
                                 )
                                 Box(
                                     Modifier.size(50.dp)
-                                        .offset { dragOffset }
+                                        .offset { micOffset }
                                         .graphicsLayer { scaleX = grow; scaleY = grow }
                                         .clip(CircleShape).background(Brush.linearGradient(listOf(accent, lerp(accent, Color.Black, 0.28f)))),
                                     contentAlignment = Alignment.Center,
@@ -1108,7 +1133,12 @@ fun Composer(
                                             if (s == 1) Icons.AutoMirrored.Rounded.Send else Icons.Rounded.Mic,
                                             null,
                                             tint = V.c.onAccent,
-                                            modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = tilt },
+                                            modifier = Modifier.size(22.dp).graphicsLayer {
+                                                val f = sendFly.value
+                                                rotationZ = tilt
+                                                translationX = f * 34.dp.toPx(); translationY = -f * 22.dp.toPx()
+                                                alpha = 1f - f; scaleX = 1f - 0.3f * f; scaleY = scaleX
+                                            },
                                         )
                                     }
                                 }
@@ -1140,6 +1170,8 @@ fun Composer(
             ) {
                 val dy = (rec as? RecordUi.Holding)?.dragY ?: 0f
                 val lockProgress = (-dy / lockPx).coerceIn(0f, 1f)
+                val bobT = androidx.compose.animation.core.rememberInfiniteTransition(label = "bob")
+                val bob by bobT.animateFloat(0f, 1f, androidx.compose.animation.core.infiniteRepeatable(tween(650), androidx.compose.animation.core.RepeatMode.Reverse), label = "bob")
                 val lockBounce by animateFloatAsState(
                     if (lockProgress >= 0.85f) 1.2f else 1f,
                     androidx.compose.animation.core.spring(dampingRatio = 0.5f, stiffness = 400f),
@@ -1148,6 +1180,7 @@ fun Composer(
 
                 Column(
                     Modifier
+                        .graphicsLayer { translationY = -lockProgress * 26.dp.toPx() }
                         .clip(RoundedCornerShape(22.dp))
                         .background(V.c.s3)
                         .border(1.dp, if (lockProgress > 0.8f) accent else V.c.hairline, RoundedCornerShape(22.dp))
@@ -1171,7 +1204,7 @@ fun Composer(
                         Icons.Rounded.KeyboardArrowUp,
                         null,
                         tint = if (lockProgress > 0.8f) accent else V.c.text3,
-                        modifier = Modifier.size(14.dp),
+                        modifier = Modifier.size(14.dp).graphicsLayer { translationY = -bob * 3.dp.toPx() * (1f - lockProgress); alpha = 1f - lockProgress },
                     )
                 }
             }
@@ -1213,13 +1246,7 @@ private fun HoldingRecordingStrip(
         Spacer(Modifier.width(8.dp))
         Text(duration(elapsedMs), style = V.t.mono, color = V.c.text)
         Spacer(Modifier.width(10.dp))
-        Waveform(
-            history.toList().ifEmpty { listOf(10, 20, 15) },
-            1f,
-            V.accent.copy(alpha = 1f - pauseProgress * 0.5f),
-            V.c.text3.copy(alpha = 0.5f),
-            Modifier.weight(1f).height(24.dp),
-        )
+        LiveBars(level, V.accent.copy(alpha = 1f - pauseProgress * 0.5f), Modifier.weight(1f).height(26.dp))
         Spacer(Modifier.width(8.dp))
         Box(contentAlignment = Alignment.CenterEnd) {
             if (textAlpha > 0f) {
@@ -1257,7 +1284,9 @@ private fun LockedRecordingBar(
     onPause: () -> Unit,
     onSend: () -> Unit,
 ) {
-    val dot by animateColorAsState(if (elapsedMs / 450 % 2 == 0L) V.c.error else V.c.error.copy(alpha = 0.3f), tween(200), label = "locked_dot")
+    val lp = androidx.compose.animation.core.rememberInfiniteTransition(label = "lrec")
+    val la by lp.animateFloat(1f, 0.25f, androidx.compose.animation.core.infiniteRepeatable(tween(700), androidx.compose.animation.core.RepeatMode.Reverse), label = "la")
+    val dot = V.c.error.copy(alpha = la)
 
     Row(
         Modifier
@@ -1288,13 +1317,7 @@ private fun LockedRecordingBar(
         Spacer(Modifier.width(10.dp))
 
         // Live Waveform
-        Waveform(
-            liveHistory,
-            1f,
-            V.accent,
-            V.c.text3.copy(alpha = 0.4f),
-            Modifier.weight(1f).height(26.dp),
-        )
+        LiveBars(LocalLiveLevel.current, V.accent, Modifier.weight(1f).height(26.dp))
 
         Spacer(Modifier.width(10.dp))
 
@@ -1445,6 +1468,41 @@ fun SelectDot(selected: Boolean, modifier: Modifier = Modifier) {
     ) {
         Box(Modifier.size(22.dp).graphicsLayer { scaleX = fill; scaleY = fill; alpha = fill.coerceIn(0f, 1f) }.clip(CircleShape).background(V.accent), contentAlignment = Alignment.Center) {
             androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Rounded.Check, null, tint = V.c.bg, modifier = Modifier.size(14.dp))
+        }
+    }
+}
+
+
+internal val LocalLiveLevel = androidx.compose.runtime.compositionLocalOf { 0f }
+
+/** Scrolling level meter: samples the mic level every 60 ms and slides bars smoothly right-to-left. */
+@Composable
+fun LiveBars(level: Float, color: Color, modifier: Modifier = Modifier) {
+    val latest by androidx.compose.runtime.rememberUpdatedState(level)
+    val bars = remember { androidx.compose.runtime.mutableStateListOf<Float>().apply { repeat(32) { add(0.08f) } } }
+    val shift = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            shift.snapTo(0f)
+            shift.animateTo(1f, tween(60, easing = androidx.compose.animation.core.LinearEasing))
+            bars.removeAt(0); bars.add(latest.coerceIn(0.06f, 1f))
+        }
+    }
+    Canvas(modifier.clipToBounds()) {
+        // Fixed bar pitch; only as many of the newest bars as fit, right-aligned (never spills over neighbours).
+        val bw = 2.5.dp.toPx()
+        val step = bw + 2.5.dp.toPx()
+        val fit = (size.width / step).toInt().coerceIn(1, bars.size)
+        val start = bars.size - fit
+        val x0 = size.width - fit * step
+        bars.forEachIndexed { idx, v ->
+            if (idx < start) return@forEachIndexed
+            val i = idx - start
+            val h = (size.height * (0.12f + 0.88f * v)).coerceAtLeast(3f)
+            val x = x0 + i * step - shift.value * step + step
+            if (x < -bw) return@forEachIndexed
+            val edge = (x / (size.width * 0.18f)).coerceIn(0f, 1f) // fade bars entering from the left edge
+            drawRoundRect(color.copy(alpha = color.alpha * (0.35f + 0.65f * edge)), androidx.compose.ui.geometry.Offset(x, (size.height - h) / 2), androidx.compose.ui.geometry.Size(bw, h), androidx.compose.ui.geometry.CornerRadius(bw / 2))
         }
     }
 }

@@ -1,5 +1,10 @@
 package com.rajdeep.vesper.ui.chat
 
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import com.rajdeep.vesper.ui.components.springOverscroll
 import com.rajdeep.vesper.ui.components.Reveal
 import android.Manifest
@@ -587,7 +592,9 @@ fun ChatScreen(
 
         // Full-screen viewer
         Reveal(viewer != null, enter = fadeIn(Motion.tw(Motion.M)) + scaleIn(Motion.spring(), initialScale = 0.92f), exit = fadeOut(Motion.tw(Motion.S)) + scaleOut(targetScale = 0.94f)) {
-            viewer?.let { ImageViewer(it) { viewer = null } }
+            var lastViewed by remember { mutableStateOf<MediaRef?>(null) }
+            if (viewer != null) lastViewed = viewer
+            lastViewed?.let { ImageViewer(it) { viewer = null } }
         }
         err?.let { msg -> LaunchedEffect(msg) { kotlinx.coroutines.delay(2800); vm.error.value = null } }
         Reveal(err != null, modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 72.dp), enter = fadeIn() + scaleIn(initialScale = 0.9f), exit = fadeOut()) {
@@ -705,15 +712,15 @@ private fun OnlinePill(n: Int) {
     val inf = androidx.compose.animation.core.rememberInfiniteTransition(label = "live")
     val pulse by inf.animateFloat(0.35f, 1f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1100), androidx.compose.animation.core.RepeatMode.Reverse), label = "p")
     Row(
-        Modifier.clip(RoundedCornerShape(9.dp)).background(green.copy(alpha = 0.12f)).padding(horizontal = 6.dp, vertical = 2.dp),
+        Modifier.clip(RoundedCornerShape(12.dp)).background(green.copy(alpha = 0.12f)).border(1.dp, green.copy(alpha = 0.22f), RoundedCornerShape(12.dp)).padding(horizontal = 10.dp, vertical = 5.dp).semantics { contentDescription = "$n online" },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(5.dp).graphicsLayer { alpha = if (n > 0) pulse else 0.4f }.clip(CircleShape).background(green))
-        Spacer(Modifier.width(4.dp))
+        Box(Modifier.size(7.dp).graphicsLayer { alpha = if (n > 0) pulse else 0.4f }.clip(CircleShape).background(green))
+        Spacer(Modifier.width(6.dp))
         androidx.compose.animation.AnimatedContent(n, transitionSpec = {
             (androidx.compose.animation.slideInVertically { if (targetState > initialState) it else -it } + fadeIn()) togetherWith (androidx.compose.animation.slideOutVertically { if (targetState > initialState) -it else it } + fadeOut())
         }, label = "online") { v ->
-            Text("$v online", style = V.t.caption.copy(fontFamily = com.rajdeep.vesper.ui.theme.Mono, fontSize = 9.5.sp, letterSpacing = 0.2.sp), color = green)
+            Text("$v", style = V.t.caption.copy(fontFamily = com.rajdeep.vesper.ui.theme.Mono, fontSize = 12.sp, letterSpacing = 0.2.sp), color = green)
         }
     }
 }
@@ -755,8 +762,9 @@ private fun ChatHeader(scope: String, peerName: String?, onBack: (() -> Unit)?, 
                     com.rajdeep.vesper.ui.components.HallMascot(34.dp, Modifier.offset(y = (-4).dp))
                     Spacer(Modifier.width(10.dp))
                     Text("The Hall", style = V.t.title, color = V.c.text)
-                    Spacer(Modifier.width(10.dp))
+                    Spacer(Modifier.weight(1f))
                     OnlinePill(online)
+                    Spacer(Modifier.width(6.dp))
                 }
                 // WhatsApp group style: "name is typing…" slides in under the title.
                 com.rajdeep.vesper.ui.components.Reveal(
@@ -804,36 +812,111 @@ fun SheetAction(text: String, danger: Boolean = false, onClick: () -> Unit) {
 @Composable
 private fun ImageViewer(ref: MediaRef, onClose: () -> Unit) {
     val host = LocalMediaHost.current
+    val cfg = androidx.compose.ui.platform.LocalConfiguration.current
+    val maxPx = (maxOf(cfg.screenWidthDp, cfg.screenHeightDp) * LocalDensity.current.density * 1.6f).toInt()
+    // Decode at about screen size: a full camera-resolution bitmap is what made zooming stutter.
     val image by produceState<ImageBitmap?>(null, ref.mediaId) {
-        value = runCatching { val b = host.open(ref); withContext(Dispatchers.Default) { BitmapFactory.decodeByteArray(b, 0, b.size)?.asImageBitmap() } }.getOrNull()
-    }
-    var scale by remember { mutableStateOf(1f) }
-    var offset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
-    val drag = remember { Animatable(0f) }
-    val scope = rememberCoroutineScope()
-    val tState = rememberTransformableState { z, pan, _ -> scale = (scale * z).coerceIn(1f, 5f); offset = if (scale > 1f) offset + pan else androidx.compose.ui.geometry.Offset.Zero }
-    val alpha = (1f - kotlin.math.abs(drag.value) / 900f).coerceIn(0.3f, 1f)
-    Box(
-        Modifier.fillMaxSize().background(V.c.scrim.copy(alpha = 0.96f * alpha))
-            .pointerInput(Unit) {
-                detectVerticalDragGestures(
-                    onDragEnd = { scope.launch { if (kotlin.math.abs(drag.value) > 220) onClose() else drag.animateTo(0f, Motion.spring()) } },
-                    onVerticalDrag = { _, d -> if (scale <= 1f) scope.launch { drag.snapTo(drag.value + d) } },
-                )
+        value = runCatching {
+            val b = host.open(ref)
+            withContext(Dispatchers.Default) {
+                val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(b, 0, b.size, o)
+                var sample = 1
+                while (maxOf(o.outWidth, o.outHeight) / (sample * 2) >= maxPx) sample *= 2
+                BitmapFactory.decodeByteArray(b, 0, b.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
             }
-            .pointerInput(Unit) { detectTapGestures(onDoubleTap = { scale = if (scale > 1f) 1f else 2.5f; if (scale == 1f) offset = androidx.compose.ui.geometry.Offset.Zero }) },
+        }.getOrNull()
+    }
+    val scale = remember { Animatable(1f) }
+    val ox = remember { Animatable(0f) }
+    val oy = remember { Animatable(0f) }
+    val dismiss = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    var box by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+    var content by remember { mutableStateOf(androidx.compose.ui.geometry.Size.Zero) }
+    fun bounds(sc: Float): androidx.compose.ui.geometry.Offset =
+        androidx.compose.ui.geometry.Offset(((content.width * sc - box.width) / 2f).coerceAtLeast(0f), ((content.height * sc - box.height) / 2f).coerceAtLeast(0f))
+    fun settle() = scope.launch {
+        val sc = scale.value.coerceIn(1f, 5f)
+        val b = bounds(sc)
+        launch { scale.animateTo(sc, Motion.spring()) }
+        launch { ox.animateTo(ox.value.coerceIn(-b.x, b.x), Motion.spring()) }
+        launch { oy.animateTo(oy.value.coerceIn(-b.y, b.y), Motion.spring()) }
+    }
+    val bgAlpha = (1f - kotlin.math.abs(dismiss.value) / 1100f).coerceIn(0.25f, 1f)
+    Box(
+        Modifier.fillMaxSize().onSizeChanged { box = it }.background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.96f * bgAlpha))
+            .pointerInput(Unit) {
+                detectTapGestures(onDoubleTap = { tap ->
+                    scope.launch {
+                        if (scale.value > 1.05f) {
+                            launch { scale.animateTo(1f, Motion.spring()) }; launch { ox.animateTo(0f, Motion.spring()) }; launch { oy.animateTo(0f, Motion.spring()) }
+                        } else {
+                            // Zoom toward the tapped point.
+                            val target = 2.6f
+                            val c = androidx.compose.ui.geometry.Offset(box.width / 2f, box.height / 2f)
+                            val b = bounds(target)
+                            val tx = ((c.x - tap.x) * (target - 1f)).coerceIn(-b.x, b.x)
+                            val ty = ((c.y - tap.y) * (target - 1f)).coerceIn(-b.y, b.y)
+                            launch { scale.animateTo(target, Motion.spring()) }; launch { ox.animateTo(tx, Motion.spring()) }; launch { oy.animateTo(ty, Motion.spring()) }
+                        }
+                    }
+                })
+            }
+            .pointerInput(Unit) {
+                // One handler for pinch, pan and swipe-to-dismiss so they never fight each other.
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    var dismissing = false
+                    var moved = false
+                    do {
+                        val ev = awaitPointerEvent()
+                        val pressed = ev.changes.count { it.pressed }
+                        val zoom = ev.calculateZoom()
+                        val pan = ev.calculatePan()
+                        val centroid = ev.calculateCentroid(useCurrent = true)
+                        if (pressed >= 2 || scale.value > 1.01f) {
+                            if (zoom != 1f || pan != androidx.compose.ui.geometry.Offset.Zero) {
+                                moved = true
+                                val old = scale.value
+                                val new = (old * zoom).coerceIn(0.85f, 6f)
+                                val c = androidx.compose.ui.geometry.Offset(box.width / 2f, box.height / 2f)
+                                // Keep the point under the fingers fixed while zooming.
+                                val f = new / old
+                                val px = (ox.value - (centroid.x - c.x - ox.value) * (f - 1f)) + pan.x
+                                val py = (oy.value - (centroid.y - c.y - oy.value) * (f - 1f)) + pan.y
+                                scope.launch { scale.snapTo(new); ox.snapTo(px); oy.snapTo(py) }
+                                ev.changes.forEach { it.consume() }
+                            }
+                        } else if (pressed == 1) {
+                            if (dismissing || kotlin.math.abs(pan.y) > kotlin.math.abs(pan.x)) {
+                                dismissing = true
+                                scope.launch { dismiss.snapTo(dismiss.value + pan.y) }
+                                ev.changes.forEach { it.consume() }
+                            }
+                        }
+                    } while (ev.changes.any { it.pressed })
+                    if (dismissing) {
+                        scope.launch { if (kotlin.math.abs(dismiss.value) > 260f) onClose() else dismiss.animateTo(0f, Motion.spring()) }
+                    } else if (moved) settle()
+                }
+            },
         contentAlignment = Alignment.Center,
     ) {
         image?.let {
             Image(
                 it, "Photo",
-                Modifier.fillMaxWidth().transformable(tState).graphicsLayer {
-                    scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y + drag.value
-                },
+                Modifier.fillMaxWidth().onSizeChanged { s -> content = androidx.compose.ui.geometry.Size(s.width.toFloat(), s.height.toFloat()) }
+                    .graphicsLayer {
+                        scaleX = scale.value; scaleY = scale.value
+                        translationX = ox.value; translationY = oy.value + dismiss.value
+                        val d = (kotlin.math.abs(dismiss.value) / 1600f).coerceIn(0f, 0.2f)
+                        if (d > 0f) { scaleX *= 1f - d; scaleY *= 1f - d }
+                    },
                 contentScale = ContentScale.Fit,
             )
         } ?: PulseDots(V.c.text)
-        IconAction(Icons.Rounded.Close, "Close", tint = V.c.text, modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp), onClick = onClose)
+        IconAction(Icons.Rounded.Close, "Close", tint = androidx.compose.ui.graphics.Color.White, modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp).graphicsLayer { alpha = bgAlpha }, onClick = onClose)
     }
 }
 
