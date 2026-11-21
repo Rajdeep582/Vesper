@@ -258,13 +258,14 @@ class Direct(
 
     /** Delete for everyone: only the sender's own messages. Removes metadata, undelivered envelopes, media and backups. */
     suspend fun unsend(c: Caller, mids: List<String>) {
-        val docs = db.privateMeta.find(Filters.and(Filters.`in`("_id", mids.take(500)), Filters.eq("fromUid", c.uid))).toList()
+        // Either participant may delete a private message for everyone (sender or recipient).
+        val docs = db.privateMeta.find(Filters.and(Filters.`in`("_id", mids.take(500)), Filters.or(Filters.eq("fromUid", c.uid), Filters.eq("toUid", c.uid)))).toList()
         if (docs.isEmpty()) return
         val ids = docs.map { it.str("_id")!! }
         media.purge(docs.mapNotNull { it.str("mediaId") })
         db.envelopes.deleteMany(Filters.`in`("mid", ids))
         db.privateMeta.deleteMany(Filters.`in`("_id", ids))
-        val peers = docs.map { it.str("toUid")!! }.toSet()
+        val peers = docs.flatMap { listOfNotNull(it.str("toUid"), it.str("fromUid")) }.toSet() - c.uid
         db.backups.deleteMany(Filters.`in`("_id", (peers + c.uid).flatMap { u -> ids.map { "$u:$it" } }))
         val frame = com.rajdeep.vesper.shared.DirectDeleted(ids)
         (peers + c.uid).forEach { hub.toUser(it, frame) }

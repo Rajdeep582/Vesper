@@ -221,7 +221,7 @@ class Messages @Inject constructor(
         }
         val hall = rows.filter { it.scope == Scope.HALL }.mapNotNull { it.serverId }
         // Pending (never reached the server) and Notes-to-self rows only need the local delete above.
-        val direct = rows.filter { it.scope == Scope.DIRECT && it.outgoing }.mapNotNull { it.serverId }.filterNot { it.startsWith("self:") }
+        val direct = rows.filter { it.scope == Scope.DIRECT }.mapNotNull { it.serverId }.filterNot { it.startsWith("self:") }
         runCatching { backup.forget(direct) }
         if (hall.isNotEmpty()) {
             runCatching {

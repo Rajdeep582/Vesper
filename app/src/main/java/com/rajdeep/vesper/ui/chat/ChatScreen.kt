@@ -597,8 +597,9 @@ fun ChatScreen(
         val rows = remember(ids) { items.filter { it.localId in ids } }
         val self = vm.peer != null && vm.peer == vm.myId
         // Everyone works for any mix of text / photo / voice: own messages (sent or still pending), or anything in the Hall for the admin.
-        fun eligible(r: MessageEntity) = r.state != MsgState.SYSTEM && (r.outgoing || r.senderId == vm.myId || (vm.isAdmin && vm.scope == Scope.HALL))
-        val canEveryone = !self && rows.isNotEmpty() && rows.all(::eligible)
+        // Private chats: either side can remove a message for everyone. Hall: your own, or anything for the admin.
+        fun eligible(r: MessageEntity) = r.state != MsgState.SYSTEM && (vm.scope == Scope.DIRECT || r.outgoing || r.senderId == vm.myId || vm.isAdmin)
+        val canEveryone = rows.isNotEmpty() && rows.all(::eligible)
         val n = rows.size.coerceAtLeast(ids.size)
         val what = run {
             val k = rows.map { it.kind }.toSet()
@@ -614,16 +615,16 @@ fun ChatScreen(
             SheetTitle(
                 if (n == 1) "Delete $what?" else "Delete $n $what?",
                 when {
-                    self -> "Notes to self live only on this phone."
-                    canEveryone -> "Delete for everyone removes it from the server and every phone."
-                    else -> "Only your own messages can be deleted for everyone."
+                    self -> "Notes to self never leave this phone — either option removes them for good."
+                    canEveryone -> "Delete for everyone removes it permanently from the server and every phone."
+                    else -> "Only your own Hall messages can be deleted for everyone."
                 },
             )
             if (canEveryone) DeleteChoice(Icons.Rounded.DeleteForever, "Delete for everyone", "Gone from the server and all phones", V.c.error) {
                 vm.deleteForEveryone(ids); done(if (n == 1) "Deleted for everyone" else "$n deleted for everyone")
             }
-            DeleteChoice(Icons.Rounded.Delete, if (self) "Delete" else "Delete for me", if (self) "Removes it from this phone" else "Removes from this phone only", if (self) V.c.error else V.c.text) {
-                vm.deleteLocal(ids); done(if (self) "Deleted" else "Deleted for you")
+            DeleteChoice(Icons.Rounded.Delete, "Delete for me", "Removes from this phone only", V.c.text) {
+                vm.deleteLocal(ids); done("Deleted for you")
             }
             Spacer(Modifier.height(28.dp))
         }
@@ -657,10 +658,10 @@ fun ChatScreen(
                 SheetAction("Retry") { vm.retry(m.localId); menuFor = null }
                 SheetAction("Discard", danger = true) { vm.discard(m.localId); menuFor = null }
             }
-            if (vm.isAdmin && vm.scope == Scope.HALL && m.serverId != null) {
+            if (m.state != MsgState.SYSTEM) SheetAction("Delete…", danger = true) { menuFor = null; deleteAsk = listOf(m.localId) }
+            if (vm.isAdmin && vm.scope == Scope.HALL && m.serverId != null && m.senderId != vm.myId) {
                 SheetLabel("Moderation")
-                SheetAction("Delete for everyone", danger = true) { vm.adminDelete(m); menuFor = null }
-                if (m.senderId != vm.myId) {
+                run {
                     SheetAction("Mute author for 1 hour") { vm.adminMute(m, 60); menuFor = null }
                     SheetAction("Mute author for 24 hours") { vm.adminMute(m, 24 * 60); menuFor = null }
                 }
@@ -835,8 +836,8 @@ private fun SelectionBar(count: Int, canCopy: Boolean, onClose: () -> Unit, onCo
                     (androidx.compose.animation.slideOutVertically(Motion.spring()) { if (up) -it else it } + fadeOut())
             },
             label = "count", modifier = Modifier.padding(start = 4.dp),
-        ) { n -> Text(n.toString(), style = V.t.subhead.copy(fontFamily = com.rajdeep.vesper.ui.theme.Mono), color = V.accent) }
-        Text(" selected", style = V.t.subhead, color = V.c.text, modifier = Modifier.weight(1f))
+        ) { n -> Text(n.toString(), style = V.t.title.copy(fontFamily = com.rajdeep.vesper.ui.theme.Mono), color = V.accent, maxLines = 1, softWrap = false) }
+        Spacer(Modifier.weight(1f))
         if (onReply != null) BarIcon(androidx.compose.material.icons.Icons.AutoMirrored.Rounded.Reply, "Reply", V.c.text, onReply)
         if (onDetails != null) BarIcon(Icons.Rounded.Info, "Details", V.c.text2, onDetails)
         if (canCopy) BarIcon(Icons.Rounded.ContentCopy, "Copy", V.c.text, onCopy)
