@@ -211,8 +211,9 @@ fun MessageBubble(
 
     val draggableState = rememberDraggableState { delta ->
         val current = swipeOffset.value
-        val maxOffset = triggerPx * 1.5f
-        val newOffset = (current + delta * 0.65f).coerceIn(-maxOffset, maxOffset)
+        // Swipe right only (like WhatsApp). Past the trigger, resistance grows — a rubber-band feel.
+        val resistance = if (current < triggerPx) 0.75f else 0.75f / (1f + (current - triggerPx) / (triggerPx * 0.6f))
+        val newOffset = (current + delta * resistance).coerceIn(0f, triggerPx * 1.8f)
         scope.launch { swipeOffset.snapTo(newOffset) }
         val passed = kotlin.math.abs(newOffset) >= triggerPx
         if (passed && !triggered) {
@@ -228,12 +229,14 @@ fun MessageBubble(
             state = draggableState,
             orientation = Orientation.Horizontal,
             onDragStarted = { triggered = false },
-            onDragStopped = {
+            onDragStopped = { velocity ->
                 if (triggered) {
                     fb.press()
                     onReply(m)
                 }
-                scope.launch { swipeOffset.animateTo(0f, Motion.spring()) }
+                triggered = false
+                // Snap home with a little overshoot, carrying the release velocity.
+                scope.launch { swipeOffset.animateTo(0f, androidx.compose.animation.core.spring(dampingRatio = 0.58f, stiffness = 520f), initialVelocity = velocity * 0.4f) }
             }
         )
     } else Modifier
@@ -486,8 +489,9 @@ fun ReplyPreviewBar(
                     Icon(Icons.Rounded.Image, null, tint = V.c.text3, modifier = Modifier.size(13.dp))
                     Spacer(Modifier.width(3.dp))
                 }
+                val c2 = V.c.text2; val c3 = V.c.s3
                 Text(
-                    text = textSnippet,
+                    text = remember(textSnippet) { com.rajdeep.vesper.ui.text.formatMessage(textSnippet, com.rajdeep.vesper.ui.theme.Mono, accent, c2, c3) },
                     style = V.t.caption.copy(fontSize = 12.sp),
                     color = V.c.text2,
                     maxLines = 1,
@@ -613,16 +617,25 @@ private fun VoiceContent(localId: String, ref: MediaRef, mine: Boolean, onLongPr
 @Composable
 fun Waveform(levels: List<Int>, progress: Float, active: Color, idle: Color, modifier: Modifier, onLongPress: (() -> Unit)? = null, onSeek: ((Float) -> Unit)? = null) {
     var w by remember { mutableFloatStateOf(1f) }
+    // Scrubbing previews locally while the finger moves and seeks once on release — no stutter from seek spam.
+    var scrub by remember { mutableStateOf<Float?>(null) }
+    val fbW = V.fb
+    val thumb by animateFloatAsState(if (scrub != null) 1f else 0f, androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 600f), label = "thumb")
+    val shown = scrub ?: progress
     Canvas(
         modifier.then(
             if (onSeek != null || onLongPress != null) Modifier.pointerInput(Unit) {
                 detectTapGestures(
-                    onTap = { onSeek?.invoke((it.x / size.width).coerceIn(0f, 1f)) },
+                    onTap = { fbW.tick(); onSeek?.invoke((it.x / size.width).coerceIn(0f, 1f)) },
                     onLongPress = { onLongPress?.invoke() },
                 )
             }.then(
                 if (onSeek != null) Modifier.pointerInput(Unit) {
-                    detectHorizontalDragGestures { change, _ -> onSeek((change.position.x / size.width).coerceIn(0f, 1f)) }
+                    detectHorizontalDragGestures(
+                        onDragStart = { o -> scrub = (o.x / size.width).coerceIn(0f, 1f); fbW.tick() },
+                        onDragEnd = { scrub?.let(onSeek); scrub = null },
+                        onDragCancel = { scrub = null },
+                    ) { change, _ -> change.consume(); scrub = (change.position.x / size.width).coerceIn(0f, 1f) }
                 } else Modifier
             ) else Modifier,
         ),
@@ -634,9 +647,13 @@ fun Waveform(levels: List<Int>, progress: Float, active: Color, idle: Color, mod
         levels.forEachIndexed { i, l ->
             val h = (size.height * (0.14f + 0.86f * (l / 100f))).coerceAtLeast(2f)
             val x = i * (bw + gap)
-            val played = (i + 0.5f) / n <= progress
-            drawRoundRect(if (played) active else idle, Offset(x, (size.height - h) / 2), Size(bw, h), CornerRadius(bw / 2))
+            val played = (i + 0.5f) / n <= shown
+            // Bars near the finger lift slightly while scrubbing.
+            val near = if (scrub != null) (1f - kotlin.math.abs((i + 0.5f) / n - shown) * 8f).coerceIn(0f, 1f) * thumb else 0f
+            val hh = (h * (1f + 0.35f * near)).coerceAtMost(size.height)
+            drawRoundRect(if (played) active else idle, Offset(x, (size.height - hh) / 2), Size(bw, hh), CornerRadius(bw / 2))
         }
+        if (thumb > 0.01f) drawCircle(active, 6.dp.toPx() * thumb, Offset(shown * size.width, size.height / 2))
     }
 }
 
