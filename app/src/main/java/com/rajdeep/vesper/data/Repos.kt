@@ -35,8 +35,10 @@ import com.rajdeep.vesper.shared.UserSummary
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.net.URLEncoder
 import javax.inject.Inject
@@ -150,7 +152,15 @@ private val Context.prefs by preferencesDataStore("vesper_prefs")
 
 enum class ThemeMode { SYSTEM, DARK, LIGHT }
 
-data class Prefs(val theme: ThemeMode = ThemeMode.DARK, val sounds: Boolean = true, val haptics: Boolean = true, val reduceMotion: Boolean = false, val disclosureSeen: Boolean = false)
+data class Prefs(
+    val theme: ThemeMode = ThemeMode.DARK,
+    val sounds: Boolean = true,
+    val haptics: Boolean = true,
+    val reduceMotion: Boolean = false,
+    val disclosureSeen: Boolean = false,
+    val turnOffHallNotifications: Boolean = false,
+    val turnOffInboxNotifications: Boolean = false,
+)
 
 /** Non-sensitive UI preferences only. */
 @Singleton
@@ -159,6 +169,24 @@ class Settings @Inject constructor(@ApplicationContext private val ctx: Context)
     private val sounds = booleanPreferencesKey("sounds")
     private val haptics = booleanPreferencesKey("haptics")
     private val motion = booleanPreferencesKey("reduce_motion")
+    private val turnOffHall = booleanPreferencesKey("turn_off_hall_notifications")
+    private val turnOffInbox = booleanPreferencesKey("turn_off_inbox_notifications")
+
+    @Volatile
+    private var cachedPrefs: Prefs = runCatching {
+        runBlocking {
+            ctx.prefs.data.map { p ->
+                Prefs(
+                    theme = p[theme]?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.DARK,
+                    sounds = p[sounds] ?: true,
+                    haptics = p[haptics] ?: true,
+                    reduceMotion = p[motion] ?: false,
+                    turnOffHallNotifications = p[turnOffHall] ?: false,
+                    turnOffInboxNotifications = p[turnOffInbox] ?: false,
+                )
+            }.first()
+        }
+    }.getOrDefault(Prefs())
 
     val prefs: Flow<Prefs> = ctx.prefs.data.map { p ->
         Prefs(
@@ -166,11 +194,24 @@ class Settings @Inject constructor(@ApplicationContext private val ctx: Context)
             sounds = p[sounds] ?: true,
             haptics = p[haptics] ?: true,
             reduceMotion = p[motion] ?: false,
-        )
+            turnOffHallNotifications = p[turnOffHall] ?: false,
+            turnOffInboxNotifications = p[turnOffInbox] ?: false,
+        ).also { cachedPrefs = it }
     }
+
+    fun isTurnOffHallNotifications(): Boolean = cachedPrefs.turnOffHallNotifications
+    fun isTurnOffInboxNotifications(): Boolean = cachedPrefs.turnOffInboxNotifications
 
     suspend fun setTheme(t: ThemeMode) = ctx.prefs.edit { it[theme] = t.name }
     suspend fun setSounds(v: Boolean) = ctx.prefs.edit { it[sounds] = v }
     suspend fun setHaptics(v: Boolean) = ctx.prefs.edit { it[haptics] = v }
     suspend fun setReduceMotion(v: Boolean) = ctx.prefs.edit { it[motion] = v }
+    suspend fun setTurnOffHallNotifications(v: Boolean) {
+        cachedPrefs = cachedPrefs.copy(turnOffHallNotifications = v)
+        ctx.prefs.edit { it[turnOffHall] = v }
+    }
+    suspend fun setTurnOffInboxNotifications(v: Boolean) {
+        cachedPrefs = cachedPrefs.copy(turnOffInboxNotifications = v)
+        ctx.prefs.edit { it[turnOffInbox] = v }
+    }
 }

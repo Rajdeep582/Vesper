@@ -68,6 +68,7 @@ import com.rajdeep.vesper.core.net.ApiException
 import com.rajdeep.vesper.core.session.SessionManager
 import com.rajdeep.vesper.data.AuthRepository
 import com.rajdeep.vesper.data.Messages
+import com.rajdeep.vesper.data.Notifier
 import com.rajdeep.vesper.data.PeopleRepository
 import com.rajdeep.vesper.data.Prefs
 import com.rajdeep.vesper.data.Settings
@@ -144,11 +145,11 @@ private fun ConversationItem(r: ConversationRow, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(r.peerName ?: "…", style = V.t.subhead, color = V.c.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (r.lastKind.isNotEmpty()) Text(if (sameDay(r.lastAt, System.currentTimeMillis())) clock(r.lastAt) else dayLabel(r.lastAt), style = V.t.mono, color = if (r.unread > 0) V.accent else V.c.text3)
+                if (r.lastKind.isNotEmpty()) Text(listDate(r.lastAt), style = V.t.mono.copy(fontSize = V.t.label.fontSize), color = if (r.unread > 0) V.accent else V.c.text3)
             }
             Spacer(Modifier.height(3.dp))
             if (r.lastKind.isEmpty()) {
-                Text("Tap to message", style = V.t.bodySmall, color = V.c.text3, maxLines = 1)
+                Text(if (r.peerName == "Notes to self") "Only on this phone · test anything here" else "Tap to message", style = V.t.bodySmall, color = V.c.text3, maxLines = 1)
                 return@Column
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -353,7 +354,12 @@ fun ChatInfoScreen(onBack: () -> Unit, onProfile: (String) -> Unit, vm: ChatInfo
 // ============================================================== You
 
 @HiltViewModel
-class YouViewModel @Inject constructor(private val auth: AuthRepository, private val settings: Settings, private val session: SessionManager) : ViewModel() {
+class YouViewModel @Inject constructor(
+    private val auth: AuthRepository,
+    private val settings: Settings,
+    private val session: SessionManager,
+    private val notifier: Notifier,
+) : ViewModel() {
     val prefs = settings.prefs.stateIn(viewModelScope, SharingStarted.Eagerly, Prefs())
     val me get() = session.current()
     val devices = MutableStateFlow<List<AdminDevice>>(emptyList())
@@ -375,6 +381,14 @@ class YouViewModel @Inject constructor(private val auth: AuthRepository, private
     fun sounds(v: Boolean) = viewModelScope.launch { settings.setSounds(v) }
     fun haptics(v: Boolean) = viewModelScope.launch { settings.setHaptics(v) }
     fun motion(v: Boolean) = viewModelScope.launch { settings.setReduceMotion(v) }
+    fun turnOffHallNotifications(v: Boolean) = viewModelScope.launch {
+        settings.setTurnOffHallNotifications(v)
+        if (v) notifier.cancelHall()
+    }
+    fun turnOffInboxNotifications(v: Boolean) = viewModelScope.launch {
+        settings.setTurnOffInboxNotifications(v)
+        if (v) notifier.cancelDirectAll()
+    }
     fun signOut() = viewModelScope.launch { busy.value = true; auth.signOut() }
     fun changePassword(u: String, cur: String, next: String, done: () -> Unit) = viewModelScope.launch {
         busy.value = true
@@ -429,6 +443,12 @@ fun YouScreen(vm: YouViewModel = hiltViewModel()) {
                 ToggleRow("Sounds", "Soft cues for sending and receiving", prefs.sounds, vm::sounds)
                 Hairline()
                 ToggleRow("Haptics", "Light touch feedback", prefs.haptics, vm::haptics)
+            }
+            SectionLabel("Notifications")
+            Group {
+                ToggleRow("Turn Off Hall Notifications", "Mute all notifications from the Hall", prefs.turnOffHallNotifications, vm::turnOffHallNotifications)
+                Hairline()
+                ToggleRow("Turn Off Inbox Notifications", "Mute all notifications from private chats", prefs.turnOffInboxNotifications, vm::turnOffInboxNotifications)
             }
             SectionLabel("About")
             com.rajdeep.vesper.ui.components.AboutContent()
@@ -492,3 +512,16 @@ private fun InfoRow(title: String, body: String) {
     }
 }
 
+
+
+/** Compact list timestamp: 14:05 · Yesterday · Fri · 20 Nov — keeps names from being squeezed. */
+private fun listDate(t: Long): String {
+    val now = System.currentTimeMillis()
+    val day = 86_400_000L
+    return when {
+        sameDay(t, now) -> clock(t)
+        sameDay(t, now - day) -> "Yesterday"
+        now - t < 6 * day -> java.text.SimpleDateFormat("EEE", java.util.Locale.getDefault()).format(java.util.Date(t))
+        else -> java.text.SimpleDateFormat("d MMM", java.util.Locale.getDefault()).format(java.util.Date(t))
+    }
+}

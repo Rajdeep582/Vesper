@@ -200,4 +200,36 @@ class ClientExtendedTest {
             assertTrue(e is GeneralSecurityException || e.cause is GeneralSecurityException)
         }
     }
+
+    @Test
+    fun testNotificationControlPreferences() {
+        val defaultPrefs = com.rajdeep.vesper.data.Prefs()
+        assertFalse("Hall notifications should be active by default", defaultPrefs.turnOffHallNotifications)
+        assertFalse("Inbox notifications should be active by default", defaultPrefs.turnOffInboxNotifications)
+
+        // Turn off Hall notifications independently
+        val hallOff = defaultPrefs.copy(turnOffHallNotifications = true)
+        assertTrue(hallOff.turnOffHallNotifications)
+        assertFalse(hallOff.turnOffInboxNotifications)
+
+        // Turn off Inbox notifications independently
+        val inboxOff = defaultPrefs.copy(turnOffInboxNotifications = true)
+        assertFalse(inboxOff.turnOffHallNotifications)
+        assertTrue(inboxOff.turnOffInboxNotifications)
+
+        // Both turned off
+        val bothOff = defaultPrefs.copy(turnOffHallNotifications = true, turnOffInboxNotifications = true)
+        assertTrue(bothOff.turnOffHallNotifications)
+        assertTrue(bothOff.turnOffInboxNotifications)
+
+        // Restore Hall notifications
+        val hallRestored = bothOff.copy(turnOffHallNotifications = false)
+        assertFalse(hallRestored.turnOffHallNotifications)
+        assertTrue(hallRestored.turnOffInboxNotifications)
+
+        // Restore Inbox notifications
+        val inboxRestored = hallRestored.copy(turnOffInboxNotifications = false)
+        assertFalse(inboxRestored.turnOffHallNotifications)
+        assertFalse(inboxRestored.turnOffInboxNotifications)
+    }
 }

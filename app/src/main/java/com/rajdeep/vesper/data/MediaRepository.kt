@@ -94,6 +94,11 @@ class MediaRepository @Inject constructor(
         return intent.mediaId
     }
 
+    /** Notes-to-self: keep the encrypted blob on this phone only, under a local id. Nothing is uploaded. */
+    suspend fun adoptLocal(staged: File, id: String) = withContext(Dispatchers.IO) {
+        staged.copyTo(File(dir, "$id.bin"), overwrite = true); staged.delete(); Unit
+    }
+
     /** Returns decrypted bytes for a media ref, downloading and verifying the ciphertext if needed. */
     suspend fun open(ref: MediaRef): ByteArray {
         plainCache.get(ref.mediaId)?.let { return it }

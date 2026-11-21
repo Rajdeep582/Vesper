@@ -44,7 +44,10 @@ import javax.inject.Singleton
 
 /** Local notifications for private messages and Hall broadcasts. Previews are built on-device; the push itself never carries content. */
 @Singleton
-class Notifier @Inject constructor(@ApplicationContext private val ctx: Context) {
+class Notifier @Inject constructor(
+    @ApplicationContext private val ctx: Context,
+    private val settings: Settings,
+) {
     @Volatile var viewingPeer: String? = null
     @Volatile var viewingHall: Boolean = false
     @Volatile var foreground: Boolean = false
@@ -75,6 +78,7 @@ class Notifier @Inject constructor(@ApplicationContext private val ctx: Context)
 
     fun direct(peer: String, name: String, kind: MessageKind, text: String?, mid: String, expiresAt: Long) {
         if (isViewing(peer)) return
+        if (settings.isTurnOffInboxNotifications()) return
         if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val preview = when (kind) { MessageKind.TEXT -> text?.take(120) ?: ""; MessageKind.VOICE -> "Voice message"; MessageKind.IMAGE -> "Photo" }
         val intent = PendingIntent.getActivity(
@@ -102,6 +106,7 @@ class Notifier @Inject constructor(@ApplicationContext private val ctx: Context)
 
     fun hall(name: String, kind: MessageKind, text: String?, id: String, expiresAt: Long) {
         if (isViewingHall()) return
+        if (settings.isTurnOffHallNotifications()) return
         if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val preview = when (kind) { MessageKind.TEXT -> text?.take(120) ?: ""; MessageKind.VOICE -> "Voice message"; MessageKind.IMAGE -> "Photo" }
         val intent = PendingIntent.getActivity(
@@ -127,7 +132,20 @@ class Notifier @Inject constructor(@ApplicationContext private val ctx: Context)
     }
 
     fun cancelFor(peer: String) = NotificationManagerCompat.from(ctx).cancel(peer.hashCode())
-    fun cancelHall() = NotificationManagerCompat.from(ctx).cancel(7002)
+    fun cancelHall() {
+        NotificationManagerCompat.from(ctx).cancel(7002)
+        byMessage.entries.removeIf { it.value.first == 7002 }
+    }
+
+    fun cancelDirectAll() {
+        val nm = NotificationManagerCompat.from(ctx)
+        byMessage.entries.forEach { entry ->
+            if (entry.value.first != 7002) {
+                nm.cancel(entry.value.first)
+            }
+        }
+        byMessage.entries.removeIf { it.value.first != 7002 }
+    }
 
     fun cancelExpired(mids: Collection<String>) {
         mids.forEach { mid -> byMessage.remove(mid)?.let { NotificationManagerCompat.from(ctx).cancel(it.first) } }

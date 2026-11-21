@@ -125,7 +125,10 @@ class Messages @Inject constructor(
             val have = convs.map { it.peerId }.toSet()
             val names = users.associate { it.id to it.username }
             val me = session.current()?.userId
-            convs + contacts.map { it.key.removePrefix("contact:") to (it.value.toLongOrNull() ?: 0L) }
+            // Notes to self is always pinned first.
+            val self = me?.let { id -> convs.firstOrNull { it.peerId == id }?.copy(peerName = "Notes to self", unread = 0)
+                ?: com.rajdeep.vesper.core.db.ConversationRow(id, "Notes to self", "", null, Long.MAX_VALUE, false, 0, 0) }
+            listOfNotNull(self) + convs.filter { it.peerId != me } + contacts.map { it.key.removePrefix("contact:") to (it.value.toLongOrNull() ?: 0L) }
                 .filter { (id, _) -> id !in have && id != me }
                 .sortedByDescending { it.second }
                 .map { (id, at) -> com.rajdeep.vesper.core.db.ConversationRow(id, names[id], "", null, at, false, 0, 0) }
@@ -253,6 +256,20 @@ class Messages @Inject constructor(
     private suspend fun sendOne(m: MessageEntity): Boolean {
         val kind = MessageKind.valueOf(m.kind)
         var ref = m.mediaJson?.let { VesperJson.decodeFromString(MediaRef.serializer(), it) }
+        // Notes to self: stays on this phone. No server round trip, no push, nobody else is touched.
+        if (m.scope == Scope.DIRECT && m.peerId == me().userId) {
+            if (ref != null && ref.mediaId.isEmpty()) {
+                val f = m.stagedBlob?.let { java.io.File(it) }
+                if (f == null || !f.exists()) { dao.markFailed(m.localId, "Media missing"); return true }
+                val id = "self-${m.localId}"
+                media.adoptLocal(f, id)
+                dao.setMedia(m.localId, VesperJson.encodeToString(MediaRef.serializer(), ref.copy(mediaId = id)))
+            }
+            val now = session.now()
+            val ttl = if (isForever(m.text)) com.rajdeep.vesper.shared.Keep.FOREVER_MS else Limits.ttlFor(kind)
+            dao.markSent(m.localId, "self:${m.localId}", now, now + ttl, null, MsgState.READ)
+            return true
+        }
         if (ref != null && ref.mediaId.isEmpty()) {
             val staged = m.stagedBlob ?: run { dao.markFailed(m.localId, "Media missing"); return true }
             val file = java.io.File(staged)

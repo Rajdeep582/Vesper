@@ -364,7 +364,7 @@ fun ChatScreen(
                 },
                 label = "header",
             ) { sel ->
-                if (!sel) ChatHeader(vm.scope, peerUser?.username, onBack, onOpenInfo, items.size, link, online)
+                if (!sel) ChatHeader(vm.scope, (if (vm.peer != null && vm.peer == vm.myId) "Notes to self" else peerUser?.username), onBack, onOpenInfo, items.size, link, online)
                 else {
                     val chosen = items.filter { it.localId in selected }
                     val clipboard = LocalClipboard.current
@@ -684,7 +684,7 @@ private fun ChatHeader(scope: String, peerName: String?, onBack: (() -> Unit)?, 
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Rounded.Lock, null, tint = V.accent, modifier = Modifier.size(11.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("End-to-end encrypted", style = V.t.caption, color = V.c.text2)
+                        Text(if (peerName == "Notes to self") "Only on this phone" else "End-to-end encrypted", style = V.t.caption, color = V.c.text2)
                     }
                 }
             }

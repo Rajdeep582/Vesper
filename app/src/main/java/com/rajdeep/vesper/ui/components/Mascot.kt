@@ -27,7 +27,13 @@ import androidx.compose.ui.unit.dp
 import com.rajdeep.vesper.ui.theme.V
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
+
 import kotlin.random.Random
+
+private fun Modifier.androidx_tap(onTap: () -> Unit) = pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }
 
 /**
  * "Ember" — the Hall's little lantern creature: a soft rounded head with two antennae, glancing around and blinking.
@@ -70,11 +76,22 @@ fun HallMascot(size: Dp = 30.dp, modifier: Modifier = Modifier) {
             }
         }
     }
+    // Tap: it hops, eyes pop wide, then settles.
+    val hop = remember { Animatable(0f) }
+    val tapScope = androidx.compose.runtime.rememberCoroutineScope()
     val inf = rememberInfiniteTransition(label = "mascot")
     val sway by inf.animateFloat(-1f, 1f, infiniteRepeatable(tween(1600), RepeatMode.Reverse), label = "sway")
     val breathe by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(2200), RepeatMode.Reverse), label = "breathe")
 
-    Canvas(modifier.size(size)) {
+    Canvas(
+        modifier.size(size)
+            .androidx_tap {
+                tapScope.launch { hop.snapTo(0f); hop.animateTo(-1f, spring(dampingRatio = 0.5f, stiffness = 900f)); hop.animateTo(0f, spring(dampingRatio = 0.35f, stiffness = 380f)) }
+                tapScope.launch { wow.animateTo(1.5f, spring(dampingRatio = 0.3f, stiffness = 600f)); delay(420); wow.animateTo(1f, spring(dampingRatio = 0.6f, stiffness = 220f)) }
+                tapScope.launch { blink.animateTo(0.08f, tween(60)); blink.animateTo(1f, tween(120)) }
+            }
+            .graphicsLayer { translationY = hop.value * size.toPx() * 0.22f; val sq = 1f + hop.value * -0.06f; scaleX = 2f - sq; scaleY = sq },
+    ) {
         val w = this.size.width; val h = this.size.height
         rotate(tilt.value, Offset(w / 2f, h * 0.75f)) {
         val headW = w * 0.80f; val headH = h * 0.54f * (1f + 0.025f * breathe)
