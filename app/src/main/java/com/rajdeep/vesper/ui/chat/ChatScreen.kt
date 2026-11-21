@@ -139,6 +139,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
+import androidx.compose.runtime.DisposableEffect
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -175,6 +177,12 @@ class ChatViewModel @Inject constructor(
     val error = MutableStateFlow<String?>(null)
     /** Hall only: members with a live connection, synced with fast polling and instant event triggers. */
     val online = messages.onlineCount
+    /** Names typing here right now: Hall members, or the peer in a private chat. */
+    val typers: StateFlow<List<String>> = (if (peer == null) messages.hallTypers.map { l -> l.map { it.name } }
+        else kotlinx.coroutines.flow.combine(messages.directTypers, people.observe(peer)) { set, u -> if (peer in set) listOf(u?.username ?: "…") else emptyList() })
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val peerOnline: StateFlow<Boolean> = messages.onlineUsers.map { peer != null && peer != myId && peer in it }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    fun typing(on: Boolean) = messages.typing(peer, on)
     fun refreshOnline() {
         if (peer == null) viewModelScope.launch { runCatching { messages.onlineCount() } }
     }
@@ -288,6 +296,9 @@ fun ChatScreen(
     val peerUser = vm.peerUser?.collectAsState()?.value
     val err by vm.error.collectAsState()
     val online by vm.online.collectAsState()
+    val typers by vm.typers.collectAsState()
+    val peerOnline by vm.peerOnline.collectAsState()
+    DisposableEffect(Unit) { onDispose { vm.typing(false) } }
     val ctx = LocalContext.current
     val fb = V.fb
     val now = rememberNow { vm.now() }
@@ -364,7 +375,7 @@ fun ChatScreen(
                 },
                 label = "header",
             ) { sel ->
-                if (!sel) ChatHeader(vm.scope, (if (vm.peer != null && vm.peer == vm.myId) "Notes to self" else peerUser?.username), onBack, onOpenInfo, items.size, link, online)
+                if (!sel) ChatHeader(vm.scope, (if (vm.peer != null && vm.peer == vm.myId) "Notes to self" else peerUser?.username), onBack, onOpenInfo, items.size, link, online, typers, peerOnline)
                 else {
                     val chosen = items.filter { it.localId in selected }
                     val clipboard = LocalClipboard.current
@@ -440,6 +451,20 @@ fun ChatScreen(
                                 },
                             )
                         }
+                    }
+                    // Live "typing" bubble under the last message, like WhatsApp.
+                    if (typers.isNotEmpty()) item(key = "__typing") {
+                        Box(Modifier.animateItem(fadeInSpec = Motion.tw(Motion.M), placementSpec = androidx.compose.animation.core.spring(dampingRatio = 0.9f, stiffness = 380f, visibilityThreshold = androidx.compose.ui.unit.IntOffset.VisibilityThreshold), fadeOutSpec = Motion.tw(Motion.S))) {
+                            TypingBubble(if (vm.scope == Scope.HALL) typers else emptyList())
+                        }
+                    }
+                }
+                // Keep the typing bubble in view when the newest message is already visible.
+                LaunchedEffect(typers.isNotEmpty()) {
+                    if (typers.isNotEmpty()) {
+                        val info = listState.layoutInfo
+                        val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+                        if (lastVisible >= info.totalItemsCount - 3) listState.animateScrollToItem(info.totalItemsCount - 1)
                     }
                 }
                 // Keyboard opening shrinks the list: if the newest message was in view just before, keep it pinned above the composer.
@@ -539,6 +564,7 @@ fun ChatScreen(
                                     }
                                 },
                                 onAttach = { attachOpen = true },
+                                onTyping = { vm.typing(it) },
                                 onRecordStart = {
                                     if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                                         if (!pendingRecord) { pendingRecord = true; micPermission.launch(Manifest.permission.RECORD_AUDIO) }
@@ -691,20 +717,34 @@ private fun OnlinePill(n: Int) {
 }
 
 @Composable
-private fun ChatHeader(scope: String, peerName: String?, onBack: (() -> Unit)?, onInfo: (() -> Unit)?, count: Int, link: Link, online: Int = 0) {
+private fun ChatHeader(scope: String, peerName: String?, onBack: (() -> Unit)?, onInfo: (() -> Unit)?, count: Int, link: Link, online: Int = 0, typers: List<String> = emptyList(), peerOnline: Boolean = false) {
     Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         if (onBack != null) IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = V.c.text, onClick = onBack) else Spacer(Modifier.width(16.dp))
         if (scope == Scope.DIRECT) {
             Row(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).pressable(scaleTo = 0.98f) { onInfo?.invoke() }.padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Monogram(peerName ?: "?", 38.dp)
+                com.rajdeep.vesper.ui.components.PresenceAvatar(peerName ?: "?", 38.dp, peerOnline)
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text(peerName ?: "…", style = V.t.subhead, color = V.c.text)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.Lock, null, tint = V.accent, modifier = Modifier.size(11.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(if (peerName == "Notes to self") "Only on this phone" else "End-to-end encrypted", style = V.t.caption, color = V.c.text2)
-                    }
+                    com.rajdeep.vesper.ui.components.LiveStatusLine(
+                        typing = if (typers.isNotEmpty()) "typing" else null,
+                        style = V.t.caption, accent = V.accent,
+                        resting = {
+                            androidx.compose.animation.Crossfade(peerOnline, animationSpec = androidx.compose.animation.core.tween(220), label = "on") { on ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (on) {
+                                        Box(Modifier.size(6.dp).clip(CircleShape).background(V.c.success))
+                                        Spacer(Modifier.width(5.dp))
+                                        Text("online", style = V.t.caption, color = V.c.success)
+                                    } else {
+                                        Icon(Icons.Rounded.Lock, null, tint = V.accent, modifier = Modifier.size(11.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(if (peerName == "Notes to self") "Only on this phone" else "End-to-end encrypted", style = V.t.caption, color = V.c.text2)
+                                    }
+                                }
+                            }
+                        },
+                    )
                 }
             }
         } else {
@@ -715,6 +755,18 @@ private fun ChatHeader(scope: String, peerName: String?, onBack: (() -> Unit)?, 
                     Text("The Hall", style = V.t.title, color = V.c.text)
                     Spacer(Modifier.width(10.dp))
                     OnlinePill(online)
+                }
+                // WhatsApp group style: "name is typing…" slides in under the title.
+                com.rajdeep.vesper.ui.components.Reveal(
+                    typers.isNotEmpty(),
+                    enter = androidx.compose.animation.expandVertically(Motion.spring()) + fadeIn(Motion.tw(Motion.M)),
+                    exit = androidx.compose.animation.shrinkVertically(Motion.tw(Motion.M)) + fadeOut(Motion.tw(Motion.S)),
+                ) {
+                    com.rajdeep.vesper.ui.components.LiveStatusLine(
+                        typing = com.rajdeep.vesper.ui.components.typingLabel(typers) ?: "",
+                        resting = {}, style = V.t.caption, accent = V.accent,
+                        modifier = Modifier.padding(start = 44.dp, top = 0.dp),
+                    )
                 }
             }
         }
@@ -849,5 +901,26 @@ private fun SelectionBar(count: Int, canCopy: Boolean, onClose: () -> Unit, onCo
 private fun BarIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, tint: androidx.compose.ui.graphics.Color, onClick: () -> Unit) {
     Box(Modifier.size(44.dp).clip(CircleShape).pressable(scaleTo = 0.88f, onClick = onClick).semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
         Icon(icon, null, tint = tint, modifier = Modifier.size(22.dp))
+    }
+}
+
+
+/** Incoming-style bubble with bouncing dots; in the Hall it shows who's typing (avatar + small name). */
+@Composable
+private fun TypingBubble(names: List<String>) {
+    val first = names.firstOrNull()
+    Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.Bottom) {
+        if (first != null) { Box(Modifier.width(36.dp)) { Monogram(first, 30.dp) } }
+        Column {
+            if (first != null) Text(
+                com.rajdeep.vesper.ui.components.typingLabel(names)!!, style = V.t.caption, color = V.accent.copy(alpha = 0.9f),
+                modifier = Modifier.padding(start = 6.dp, bottom = 3.dp), maxLines = 1,
+            )
+            Box(
+                Modifier.clip(RoundedCornerShape(18.dp, 18.dp, 18.dp, 6.dp)).background(V.c.s2)
+                    .border(1.dp, V.c.hairline, RoundedCornerShape(18.dp, 18.dp, 18.dp, 6.dp))
+                    .padding(horizontal = 16.dp, vertical = 13.dp),
+            ) { com.rajdeep.vesper.ui.components.TypingDots(V.c.text2, 6.dp) }
+        }
     }
 }

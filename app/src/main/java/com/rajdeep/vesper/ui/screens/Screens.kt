@@ -114,11 +114,15 @@ import javax.inject.Inject
 @HiltViewModel
 class DirectListViewModel @Inject constructor(messages: Messages) : ViewModel() {
     val rows = messages.directList().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val online = messages.onlineUsers
+    val typing = messages.directTypers.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 }
 
 @Composable
 fun DirectListScreen(onOpen: (String) -> Unit, onFindPeople: () -> Unit, vm: DirectListViewModel = hiltViewModel()) {
     val rows by vm.rows.collectAsState()
+    val online by vm.online.collectAsState()
+    val typing by vm.typing.collectAsState()
     Column(Modifier.fillMaxSize().background(V.c.bg).statusBarsPadding()) {
         ScreenHeader("Direct", "Private · end-to-end encrypted")
         when {
@@ -132,7 +136,7 @@ fun DirectListScreen(onOpen: (String) -> Unit, onFindPeople: () -> Unit, vm: Dir
             }
             else -> LazyColumn(Modifier.fillMaxSize().springOverscroll(), overscrollEffect = null) {
                 items(rows!!, key = { it.peerId }) { r ->
-                    Box(Modifier.animateItem(placementSpec = Motion.offsetSpring).staggerIn(rows!!.indexOf(r), r.peerId)) { ConversationItem(r) { onOpen(r.peerId) } }
+                    Box(Modifier.animateItem(placementSpec = Motion.offsetSpring).staggerIn(rows!!.indexOf(r), r.peerId)) { ConversationItem(r, online = r.peerId in online && r.peerName != "Notes to self", typing = r.peerId in typing) { onOpen(r.peerId) } }
                 }
             }
         }
@@ -140,14 +144,19 @@ fun DirectListScreen(onOpen: (String) -> Unit, onFindPeople: () -> Unit, vm: Dir
 }
 
 @Composable
-private fun ConversationItem(r: ConversationRow, onClick: () -> Unit) {
-    ListRow(onClick = onClick, leading = { Monogram(r.peerName ?: "?", 48.dp) }) {
+private fun ConversationItem(r: ConversationRow, online: Boolean = false, typing: Boolean = false, onClick: () -> Unit) {
+    ListRow(onClick = onClick, leading = { com.rajdeep.vesper.ui.components.PresenceAvatar(r.peerName ?: "?", 48.dp, online) }) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(r.peerName ?: "…", style = V.t.subhead, color = V.c.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (r.lastKind.isNotEmpty()) Text(listDate(r.lastAt), style = V.t.mono.copy(fontSize = V.t.label.fontSize), color = if (r.unread > 0) V.accent else V.c.text3)
             }
             Spacer(Modifier.height(3.dp))
+            // Typing beats the last-message preview (WhatsApp inbox).
+            if (typing) {
+                com.rajdeep.vesper.ui.components.LiveStatusLine("typing", resting = {}, style = V.t.bodySmall, accent = V.accent)
+                return@Column
+            }
             if (r.lastKind.isEmpty()) {
                 Text(if (r.peerName == "Notes to self") "Only on this phone · test anything here" else "Tap to message", style = V.t.bodySmall, color = V.c.text3, maxLines = 1)
                 return@Column

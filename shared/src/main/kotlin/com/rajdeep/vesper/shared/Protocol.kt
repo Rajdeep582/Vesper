@@ -312,6 +312,14 @@ sealed interface Frame
 @Serializable @SerialName("direct.deleted") data class DirectDeleted(val mids: List<String>) : Frame
 /** Server → sender: [byUserId] has seen these messages (blue ticks). */
 @Serializable @SerialName("direct.seen") data class DirectSeen(val mids: List<String>, val byUserId: String) : Frame
+/** Client → server: "I'm typing" (refreshed every few seconds while typing). toUserId null = the Hall. */
+@Serializable @SerialName("typing") data class Typing(val toUserId: String? = null, val on: Boolean = true) : Frame
+/** Server → client: someone is (or stopped) typing. toUserId null = in the Hall, else in your private chat with them. */
+@Serializable @SerialName("typing.at") data class TypingAt(val fromUserId: String, val fromName: String, val toUserId: String? = null, val on: Boolean) : Frame
+/** Server → client: a member came online / went offline. */
+@Serializable @SerialName("presence") data class Presence(val userId: String, val online: Boolean, val lastActiveAt: Long = 0) : Frame
+/** Server → client, right after connecting: everyone online now. */
+@Serializable @SerialName("presence.snapshot") data class PresenceSnapshot(val online: List<String>) : Frame
 @Serializable @SerialName("ping") data class Ping(val at: Long = 0) : Frame
 
 @Serializable @SerialName("pong") data class Pong(val serverTime: Long) : Frame

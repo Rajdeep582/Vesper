@@ -116,6 +116,7 @@ fun Application.vesper(cfg: Config, db: Db, startJobs: Boolean = true): Services
             val now = ServerClock.now()
             db.users.updateOne(Document("_id", uid), Updates.set("la", now.asDate()))
             s.hub.toAdmins(AdminPresence(uid, online, now))
+            s.hub.toAll(com.rajdeep.vesper.shared.Presence(uid, online, now))
         }
     }
     if (startJobs) s.sweeper.start(s.scope)
@@ -299,7 +300,9 @@ private fun Route.socket(s: Services) {
             return@webSocket
         }
         val conn = Conn(c.uid, c.did, c.isAdmin, this)
+        val myName = user.str("u") ?: "someone"
         s.hub.add(conn)
+        conn.send(com.rajdeep.vesper.shared.PresenceSnapshot(s.hub.onlineUsers().toList()))
         s.accounts.touchDevice(c)
         val pump = launch { runCatching { conn.pump() } }
         var lastTouch = ServerClock.now()
@@ -315,6 +318,13 @@ private fun Route.socket(s: Services) {
                         is DirectAck -> { s.direct.ack(c, frame); null }
                         is DirectRead -> { s.direct.read(c, frame); null }
                         is Ping -> Pong(ServerClock.now())
+                        is com.rajdeep.vesper.shared.Typing -> {
+                            val t = com.rajdeep.vesper.shared.TypingAt(c.uid, myName, frame.toUserId, frame.on)
+                            val to = frame.toUserId
+                            if (to == null) s.hub.toAllExcept(c.uid, t)
+                            else if (to != c.uid) s.hub.toUser(to, t)
+                            null
+                        }
                         else -> null
                     }
                 }.getOrElse { e ->

@@ -693,8 +693,14 @@ fun Composer(
     onRecordFinish: (send: Boolean) -> Unit,
     getPreviewBytes: () -> ByteArray? = { null },
     getRecordedWaveform: () -> List<Int> = { emptyList() },
+    onTyping: (Boolean) -> Unit = {},
 ) {
     var text by remember { mutableStateOf("") }
+    val typingNow by androidx.compose.runtime.rememberUpdatedState(onTyping)
+    // Each keystroke restarts this: "typing" while active, "stopped" after 4 s idle or when cleared/sent.
+    LaunchedEffect(text) {
+        if (text.isNotBlank()) { typingNow(true); kotlinx.coroutines.delay(4_000); typingNow(false) } else typingNow(false)
+    }
     var rec by remember { mutableStateOf<RecordUi>(RecordUi.Idle) }
     var isTouching by remember { mutableStateOf(false) }
     // WhatsApp-style hint after a too-short tap on the mic.

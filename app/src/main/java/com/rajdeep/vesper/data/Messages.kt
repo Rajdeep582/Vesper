@@ -50,6 +50,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -98,6 +100,34 @@ class Messages @Inject constructor(
     private val _onlineCount = MutableStateFlow(1)
     val onlineCount: StateFlow<Int> = _onlineCount
 
+    // ---- Live presence + typing (WhatsApp-style). Ephemeral: never stored. ----
+    data class Typer(val id: String, val name: String, val to: String?, val at: Long)
+    private val _typers = MutableStateFlow<Map<String, Typer>>(emptyMap())
+    /** Who is typing in the Hall right now (newest first). */
+    val hallTypers: Flow<List<Typer>> = _typers.map { m -> m.values.filter { it.to == null }.sortedByDescending { it.at } }.distinctUntilChanged()
+    /** Peers typing to me in a private chat. */
+    val directTypers: Flow<Set<String>> = _typers.map { m -> m.values.filter { it.to != null }.map { it.id }.toSet() }.distinctUntilChanged()
+    private val _online = MutableStateFlow<Set<String>>(emptySet())
+    val onlineUsers: StateFlow<Set<String>> = _online
+    private val typingSentAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** Called on every keystroke; throttled to one frame per 3 s per chat, plus an explicit stop. */
+    fun typing(toUserId: String?, on: Boolean) {
+        val me = session.current()?.userId ?: return
+        if (toUserId == me) return // Notes to self: nobody to tell
+        val key = toUserId ?: "hall"
+        val now = System.currentTimeMillis()
+        if (on) {
+            if (now - (typingSentAt[key] ?: 0L) < 3_000) return
+            typingSentAt[key] = now
+            rt.send(com.rajdeep.vesper.shared.Typing(toUserId, true))
+        } else if (typingSentAt.remove(key) != null) {
+            rt.send(com.rajdeep.vesper.shared.Typing(toUserId, false))
+        }
+    }
+
+    private fun dropTyper(id: String, to: String?) { _typers.value = _typers.value - "$id|${if (to == null) "hall" else "d"}" }
+
     val stores = RoomSignalStores(db.signal()) { session.localIdentity() }
     val cipher = SignalCipher(stores) { SignalProtocolAddress(session.current()!!.userId, session.current()!!.deviceId) }
 
@@ -107,6 +137,17 @@ class Messages @Inject constructor(
         }
         scope.launch { rt.connected.collect { onConnected() } }
         scope.launch { rt.frames.collect { runCatching { onFrame(it) } } }
+        // Typing expires 6 s after the last refresh (sender refreshes every 3 s).
+        scope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(1_000)
+                val cut = System.currentTimeMillis() - 6_000
+                val m = _typers.value
+                if (m.values.any { it.at < cut }) _typers.value = m.filterValues { it.at >= cut }
+            }
+        }
+        // Lost the socket: presence and typing are unknown, so show nothing rather than stale state.
+        scope.launch { rt.link.collect { if (it != com.rajdeep.vesper.core.net.Link.ONLINE) { _online.value = emptySet(); _typers.value = emptyMap(); typingSentAt.clear() } } }
     }
 
     fun hall(): Flow<List<MessageEntity>> = dao.hall()
@@ -415,13 +456,22 @@ class Messages @Inject constructor(
 
     private suspend fun onFrame(f: com.rajdeep.vesper.shared.Frame) {
         when (f) {
-            is HallMsg -> storeHall(f.msg, live = true)
+            is HallMsg -> { dropTyper(f.msg.senderId, null); storeHall(f.msg, live = true) }
+            is com.rajdeep.vesper.shared.TypingAt -> {
+                val key = "${f.fromUserId}|${f.toUserId?.let { "d" } ?: "hall"}"
+                _typers.value = if (f.on) _typers.value + (key to Typer(f.fromUserId, f.fromName, f.toUserId, System.currentTimeMillis())) else _typers.value - key
+            }
+            is com.rajdeep.vesper.shared.Presence -> {
+                _online.value = if (f.online) _online.value + f.userId else _online.value - f.userId
+                if (!f.online) _typers.value = _typers.value.filterValues { it.id != f.userId }
+            }
+            is com.rajdeep.vesper.shared.PresenceSnapshot -> _online.value = f.online.toSet()
             is HallDeleted -> {
                 val rows = dao.hallByServerIds(f.ids)
                 media.purge(rows.mapNotNull { r -> r.mediaJson?.let { VesperJson.decodeFromString(MediaRef.serializer(), it).mediaId } })
                 dao.deleteHallByServerIds(f.ids)
             }
-            is DirectEnv -> if (receiveEnvelope(f.env, live = true)) rt.send(DirectAck(listOf(f.env.id)))
+            is DirectEnv -> if (true.also { dropTyper(f.env.fromUserId, "d") } && receiveEnvelope(f.env, live = true)) rt.send(DirectAck(listOf(f.env.id)))
             is DirectDelivered -> dao.markDelivered(f.mid)
             is com.rajdeep.vesper.shared.DirectDeleted -> {
                 val rows = dao.byServerIds(f.mids).filter { it.scope == Scope.DIRECT }

@@ -58,6 +58,7 @@ class Hub {
 
     fun toUser(uid: String, frame: Frame) = byUser[uid]?.forEach { it.send(frame) }
     fun toDevice(uid: String, did: Int, frame: Frame) = byUser[uid]?.filter { it.did == did }?.forEach { it.send(frame) }
+    fun toAllExcept(uid: String, frame: Frame) = byUser.forEach { (u, set) -> if (u != uid) set.forEach { it.send(frame) } }
     fun toAll(frame: Frame) = byUser.values.forEach { set -> set.forEach { it.send(frame) } }
     fun toAdmins(frame: Frame) = byUser.values.forEach { set -> set.filter { it.isAdmin }.forEach { it.send(frame) } }
 
