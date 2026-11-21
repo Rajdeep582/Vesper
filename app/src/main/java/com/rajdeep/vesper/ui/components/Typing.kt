@@ -106,3 +106,6 @@ fun PresenceAvatar(name: String, size: Dp, online: Boolean, modifier: Modifier =
         )
     }
 }
+
+/** False while a kept-alive tab is hidden behind another one. */
+val LocalTabActive = androidx.compose.runtime.staticCompositionLocalOf { true }

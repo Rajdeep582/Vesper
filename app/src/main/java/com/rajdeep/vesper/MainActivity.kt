@@ -1,5 +1,7 @@
 package com.rajdeep.vesper
 
+import androidx.compose.runtime.remember
+import androidx.compose.ui.zIndex
 import com.rajdeep.vesper.ui.components.Reveal
 import android.Manifest
 import android.content.Intent
@@ -251,19 +253,35 @@ class MainActivity : ComponentActivity() {
                     .consumeWindowInsets(androidx.compose.foundation.layout.PaddingValues(bottom = 80.dp))
                     .pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus(); keyboard?.hide() }) },
             ) {
-                AnimatedContent(tab, transitionSpec = {
-                    val dir = if (targetState.ordinal > initialState.ordinal) 1 else -1
-                    (fadeIn(Motion.tw(Motion.M)) + slideInHorizontally(Motion.tw()) { it / 14 * dir }) togetherWith (fadeOut(Motion.tw(Motion.S)) + slideOutHorizontally(Motion.tw()) { -it / 14 * dir })
-                }, label = "tabs") { t ->
-                    CompositionLocalProvider(LocalSpace provides t.space) { Box(Modifier.fillMaxSize().background(V.c.bg)) {
-                        when (t) {
-                            Tab.HALL -> ChatScreen(onBack = null, onOpenInfo = null, onOpenProfile = openPerson, listState = hallListState)
-                            Tab.DIRECT -> DirectListScreen(onOpen = { nav.navigate(DirectChatRoute(it)) }, onFindPeople = { tab = Tab.PEOPLE })
-                            Tab.PEOPLE -> PeopleScreen(onProfile = openPerson)
-                            Tab.YOU -> YouScreen()
-                            Tab.CONSOLE -> ConsoleScreen(onMember = { nav.navigate(MemberRoute(it)) })
+                // Tabs stay composed once visited: switching back is instant (no rebuild of the Hall list, scroll kept),
+                // and the change is a short cross-fade with a slight directional drift.
+                val visited = remember { androidx.compose.runtime.mutableStateListOf(tab) }
+                if (tab !in visited) visited.add(tab)
+                var lastTab by remember { mutableStateOf(tab) }
+                val dir = if (tab.ordinal >= lastTab.ordinal) 1f else -1f
+                LaunchedEffect(tab) { lastTab = tab }
+                val density = LocalDensity.current
+                Tab.entries.forEach { t ->
+                    if (t in visited && (t != Tab.CONSOLE || isAdmin)) androidx.compose.runtime.key(t) {
+                        val sel = t == tab
+                        val p by androidx.compose.animation.core.animateFloatAsState(if (sel) 1f else 0f, androidx.compose.animation.core.tween(if (sel) 240 else 160, easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "tab")
+                        val drift = with(density) { 18.dp.toPx() }
+                        Box(
+                            Modifier.fillMaxSize().zIndex(if (sel) 1f else 0f)
+                                .graphicsLayer { alpha = p; translationX = (1f - p) * drift * (if (sel) dir else -dir) }
+                                .then(if (sel) Modifier.pointerInput(Unit) {} else Modifier)
+                                .background(V.c.bg),
+                        ) {
+                            CompositionLocalProvider(LocalSpace provides t.space, com.rajdeep.vesper.ui.components.LocalTabActive provides sel) {
+                                when (t) {
+                                    Tab.HALL -> ChatScreen(onBack = null, onOpenInfo = null, onOpenProfile = openPerson, listState = hallListState)
+                                    Tab.DIRECT -> DirectListScreen(onOpen = { nav.navigate(DirectChatRoute(it)) }, onFindPeople = { tab = Tab.PEOPLE })
+                                    Tab.PEOPLE -> PeopleScreen(onProfile = openPerson)
+                                    Tab.YOU -> YouScreen()
+                                    Tab.CONSOLE -> ConsoleScreen(onMember = { nav.navigate(MemberRoute(it)) })
+                                }
+                            }
                         }
-                    }
                     }
                 }
             }

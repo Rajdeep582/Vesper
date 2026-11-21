@@ -306,39 +306,45 @@ fun MessageBubble(
                         .then(swipeDraggable)
                         .combinedClickable(remember { MutableInteractionSource() }, null, onLongClick = onLongPress, onClick = { if (selecting) onToggle() else if (m.state == MsgState.FAILED) onRetry() }),
                 ) {
-                    Column {
+                    // WhatsApp-style text layout: the time sits in the bottom-right corner — on the last line when it fits, else on its own line.
+                    val textMeasurer = rememberTextMeasurer()
+                    val q2 = V.c.text2; val s3 = V.c.s3
+                    val bodyStyle = V.t.body
+                    val metaStyle = V.t.mono.copy(fontSize = V.t.caption.fontSize)
+                    val shown = remember(m.text, accent, q2) { if (kind == MessageKind.TEXT) com.rajdeep.vesper.ui.text.formatMessage(m.text ?: "", com.rajdeep.vesper.ui.theme.Mono, accent, q2, s3) else null }
+                    val padH = 26.dp
+                    val textPlan = remember(shown, maxW, bodyStyle, m.outgoing, m.acceptedAt, m.createdAt, m.replyRef != null, density) {
+                        if (shown == null) null else with(density) {
+                            val availPx = (maxW - padH).toPx().toInt().coerceAtLeast(1)
+                            val layout = textMeasurer.measure(shown, bodyStyle, constraints = Constraints(maxWidth = availPx))
+                            val clockW = textMeasurer.measure(clock(m.acceptedAt ?: m.createdAt), metaStyle).size.width.toFloat()
+                            val forever = m.text != null && com.rajdeep.vesper.ui.text.MessageText.isForever(m.text)
+                            val metaW = clockW + (if (m.outgoing) (15.dp + 5.dp).toPx() else 0f) + (if (forever) (14.dp + 5.dp).toPx() else 0f)
+                            val last = layout.lineCount - 1
+                            val lastW = layout.getLineRight(last) - layout.getLineLeft(last)
+                            val maxLine = (0..last).maxOf { layout.getLineRight(it) - layout.getLineLeft(it) }
+                            val gap = 10.dp.toPx()
+                            val inline = lastW + gap + metaW <= availPx
+                            var content = if (inline) maxOf(maxLine, lastW + gap + metaW) else maxOf(maxLine, metaW)
+                            if (m.replyRef != null) content = maxOf(content, 168.dp.toPx())
+                            inline to (kotlin.math.ceil(content).toDp() + 2.dp + padH).coerceAtMost(maxW)
+                        }
+                    }
+                    Column(if (textPlan != null) Modifier.width(textPlan.second) else Modifier.width(androidx.compose.foundation.layout.IntrinsicSize.Max)) {
                         m.replyRef?.let { rep ->
                             QuotedReplyCard(rep) { onJumpToMessage?.invoke(rep.messageId) }
                         }
                         when (kind) {
                             MessageKind.TEXT -> {
-                                val q2 = V.c.text2; val s3 = V.c.s3
-                                val bodyStyle = V.t.body
-                                val shown = remember(m.text, accent, q2) { com.rajdeep.vesper.ui.text.formatMessage(m.text ?: "", com.rajdeep.vesper.ui.theme.Mono, accent, q2, s3) }
-                                val textMeasurer = rememberTextMeasurer()
-                                val maxContentWidthPx = with(density) { (maxW - 26.dp).toPx() }.toInt().coerceAtLeast(1)
-                                val layout = remember(shown, maxContentWidthPx, bodyStyle) {
-                                    textMeasurer.measure(
-                                        text = shown,
-                                        style = bodyStyle,
-                                        constraints = Constraints(maxWidth = maxContentWidthPx)
-                                    )
-                                }
-                                val contentWidthDp = remember(layout, density, m.replyRef) {
-                                    val maxLineWidth = (0 until layout.lineCount)
-                                        .maxOfOrNull { layout.getLineRight(it) - layout.getLineLeft(it) } ?: 0f
-                                    val textWidthDp = with(density) { kotlin.math.ceil(maxLineWidth).toDp() } + 4.dp
-                                    val minWidth = if (m.replyRef != null) 160.dp else 64.dp
-                                    maxOf(textWidthDp, minWidth)
-                                }
-                                val bubbleWidth = (contentWidthDp + 26.dp).coerceAtMost(maxW)
-                                Column(
-                                    Modifier
-                                        .width(bubbleWidth)
-                                        .padding(start = 14.dp, end = 12.dp, top = if (m.replyRef != null) 3.dp else 9.dp, bottom = 7.dp)
-                                ) {
-                                    Text(shown, style = V.t.body, color = V.c.text)
-                                    Meta(m, fraction, Modifier.align(Alignment.End))
+                                val inline = textPlan?.first == true
+                                Box(Modifier.fillMaxWidth().padding(start = 14.dp, end = 12.dp, top = if (m.replyRef != null) 3.dp else 8.dp, bottom = 7.dp)) {
+                                    if (inline) {
+                                        Text(shown!!, style = bodyStyle, color = V.c.text, modifier = Modifier.align(Alignment.TopStart))
+                                        Meta(m, fraction, Modifier.align(Alignment.BottomEnd).offset(y = 3.dp))
+                                    } else Column(Modifier.fillMaxWidth()) {
+                                        Text(shown!!, style = bodyStyle, color = V.c.text)
+                                        Meta(m, fraction, Modifier.align(Alignment.End))
+                                    }
                                 }
                             }
                             MessageKind.IMAGE -> Column {

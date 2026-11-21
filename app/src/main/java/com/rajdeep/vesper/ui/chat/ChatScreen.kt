@@ -306,16 +306,18 @@ fun ChatScreen(
     var infoSheet by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     var deleteAsk by remember { mutableStateOf<List<String>?>(null) }
+    val tabActive = com.rajdeep.vesper.ui.components.LocalTabActive.current
     val selected = remember { androidx.compose.runtime.mutableStateListOf<String>() }
     val selecting = selected.isNotEmpty()
     fun toggle(m: MessageEntity) { if (m.state == MsgState.SYSTEM) return; fb.tick(); if (m.localId in selected) selected.remove(m.localId) else selected.add(m.localId) }
-    androidx.activity.compose.BackHandler(enabled = selecting) { selected.clear() }
+    androidx.activity.compose.BackHandler(enabled = selecting && tabActive) { selected.clear() }
     LaunchedEffect(items) { val ids = items.map { it.localId }.toSet(); selected.retainAll { it in ids } }
     var viewer by remember { mutableStateOf<MediaRef?>(null) }
     var attachOpen by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    androidx.compose.runtime.DisposableEffect(Unit) { vm.onVisible(true); onDispose { vm.onVisible(false) } }
+    LaunchedEffect(tabActive) { vm.onVisible(tabActive); if (!tabActive) vm.typing(false) }
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { vm.onVisible(false) } }
     LaunchedEffect(Unit) {
         vm.events.collect { e ->
             when (e) {
