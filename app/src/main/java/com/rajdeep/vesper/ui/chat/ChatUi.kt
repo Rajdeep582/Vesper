@@ -82,6 +82,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -685,6 +686,9 @@ fun Composer(
     var text by remember { mutableStateOf("") }
     var rec by remember { mutableStateOf<RecordUi>(RecordUi.Idle) }
     var isTouching by remember { mutableStateOf(false) }
+    // WhatsApp-style hint after a too-short tap on the mic.
+    var holdHint by remember { mutableStateOf(0) }
+    LaunchedEffect(holdHint) { if (holdHint > 0) { kotlinx.coroutines.delay(1800); holdHint = 0 } }
     val fb = V.fb
     val accent = V.accent
     val density = LocalDensity.current
@@ -887,8 +891,9 @@ fun Composer(
                             val halo by animateFloatAsState(if (holding) 1f + level.coerceIn(0f, 1f) * 0.85f else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.6f, stiffness = 300f), label = "halo")
                             val dragOffset = (rec as? RecordUi.Holding)?.let {
                                 IntOffset(
-                                    (it.dragX * 0.35f).roundToInt().coerceIn(-100, 0),
-                                    (it.dragY * 0.45f).roundToInt().coerceIn(-140, 0),
+                                    // Mic tracks the finger: left toward cancel, up toward the lock (dominant axis only).
+                                    if (-it.dragX > -it.dragY) (it.dragX * 0.85f).roundToInt().coerceIn(-cancelPx.roundToInt(), 0) else 0,
+                                    if (-it.dragY >= -it.dragX) (it.dragY * 0.75f).roundToInt().coerceIn(-lockPx.roundToInt(), 0) else 0,
                                 )
                             } ?: IntOffset.Zero
 
@@ -906,9 +911,11 @@ fun Composer(
                                             awaitEachGesture {
                                                 val down = awaitFirstDown(requireUnconsumed = false)
                                                 val downUptime = android.os.SystemClock.uptimeMillis()
-                                                val activationDelayMs = 700L
+                                                // Starts almost instantly (like WhatsApp); a tiny delay filters accidental brushes.
+                                                val activationDelayMs = 140L
                                                 val touchSlop = viewConfiguration.touchSlop
                                                 var activated = false
+                                                var released = false
                                                 isTouching = true
 
                                                 try {
@@ -927,6 +934,7 @@ fun Composer(
                                                         }
                                                         val change = event.changes.firstOrNull { it.id == down.id }
                                                         if (change == null || !change.pressed) {
+                                                            released = true
                                                             break
                                                         }
                                                         val currentX = change.position.x - down.position.x
@@ -964,7 +972,14 @@ fun Composer(
                                                     isTouching = false
                                                 }
 
+                                                // Finger kept moving the whole delay (no idle gap) but never lifted: still a hold.
+                                                if (!activated && !released && android.os.SystemClock.uptimeMillis() - downUptime >= activationDelayMs) activated = true
                                                 if (!activated) {
+                                                    if (released) { fb.tick(); holdHint = holdHint + 1 }
+                                                    return@awaitEachGesture
+                                                }
+                                                if (false) {
+                                                    fb.tick(); holdHint = holdHint + 1
                                                     return@awaitEachGesture
                                                 }
 
@@ -992,6 +1007,7 @@ fun Composer(
 
                                                 var lockedNow = false
                                                 var pausedNow = false
+                                                var cancelledNow = false
                                                 var lastX = 0f
 
                                                 while (true) {
@@ -1010,25 +1026,24 @@ fun Composer(
                                                         lockedNow = true
                                                         break
                                                     } else if (currentX < -cancelPx) {
-                                                        fb.tick()
-                                                        currentOnRecordPause()
-                                                        rec = RecordUi.Paused
-                                                        pausedNow = true
+                                                        // Slide left far enough = cancel, exactly like WhatsApp.
+                                                        fb.error()
+                                                        currentOnRecordFinish(false)
+                                                        rec = RecordUi.Idle
+                                                        cancelledNow = true
                                                         break
                                                     }
 
                                                     rec = RecordUi.Holding(currentX.coerceAtMost(0f), currentY.coerceAtMost(0f))
                                                 }
 
-                                                if (!lockedNow && !pausedNow) {
+                                                if (!lockedNow && !pausedNow && !cancelledNow) {
                                                     val recordedDuration = android.os.SystemClock.uptimeMillis() - recordStartUptime
-                                                    if (lastX < -cancelPx * 0.75f) {
-                                                        fb.tick()
-                                                        currentOnRecordPause()
-                                                        rec = RecordUi.Paused
-                                                    } else if (recordedDuration < 1000L) {
+                                                    if (recordedDuration < 700L) {
+                                                        // Too short to be a voice note: discard and show the hint.
                                                         currentOnRecordFinish(false)
                                                         rec = RecordUi.Idle
+                                                        holdHint = holdHint + 1
                                                     } else {
                                                         currentOnRecordFinish(true)
                                                         fb.recordStop()
@@ -1080,6 +1095,19 @@ fun Composer(
                 }
             }
 
+            // "Hold to record" hint after a quick tap.
+            Reveal(
+                holdHint > 0,
+                modifier = Modifier.align(Alignment.TopEnd).offset(x = (-6).dp, y = (-46).dp),
+                enter = fadeIn(tween(Motion.S)) + scaleIn(Motion.bouncy(), initialScale = 0.8f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 1f)),
+                exit = fadeOut(tween(Motion.S)),
+            ) {
+                Text(
+                    "Hold to record, release to send",
+                    style = V.t.label, color = V.c.text,
+                    modifier = Modifier.clip(RoundedCornerShape(14.dp)).background(V.c.s3).border(1.dp, V.c.hairline, RoundedCornerShape(14.dp)).padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+            }
             // Lock hint floats above the mic while holding.
             Reveal(
                 rec is RecordUi.Holding,
@@ -1136,7 +1164,9 @@ private fun HoldingRecordingStrip(
     cancelPx: Float,
 ) {
     val pauseProgress = (-dragX / cancelPx).coerceIn(0f, 1f)
-    val dot by animateColorAsState(if (elapsedMs / 450 % 2 == 0L) V.c.error else V.c.error.copy(alpha = 0.3f), tween(200), label = "rec_dot")
+    val pulse = androidx.compose.animation.core.rememberInfiniteTransition(label = "rec")
+    val dotAlpha by pulse.animateFloat(1f, 0.25f, androidx.compose.animation.core.infiniteRepeatable(tween(700), androidx.compose.animation.core.RepeatMode.Reverse), label = "dot")
+    val dot = V.c.error.copy(alpha = dotAlpha)
     val history = remember { ArrayDeque<Int>() }
     LaunchedEffect(level) {
         history.addLast((level * 100).roundToInt())
@@ -1145,7 +1175,7 @@ private fun HoldingRecordingStrip(
 
     val textAlpha = (1f - pauseProgress * 1.5f).coerceIn(0f, 1f)
     val releaseAlpha = ((pauseProgress - 0.75f) / 0.25f).coerceIn(0f, 1f)
-    val nudgeX = (dragX * 0.10f).coerceIn(-10f, 0f)
+    val nudgeX = (dragX * 0.6f).coerceIn(-cancelPx, 0f)
 
     Row(
         Modifier
@@ -1171,7 +1201,7 @@ private fun HoldingRecordingStrip(
         Box(contentAlignment = Alignment.CenterEnd) {
             if (textAlpha > 0f) {
                 Text(
-                    "‹ slide left to pause",
+                    "‹  Slide to cancel",
                     style = V.t.caption.copy(fontSize = 11.5.sp),
                     color = V.c.text2,
                     maxLines = 1,
@@ -1183,7 +1213,7 @@ private fun HoldingRecordingStrip(
             }
             if (releaseAlpha > 0f) {
                 Text(
-                    "Release to pause",
+                    "Release… or keep sliding",
                     style = V.t.caption.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold),
                     color = V.accent,
                     maxLines = 1,
