@@ -95,6 +95,22 @@ import com.rajdeep.vesper.ui.components.Toggle
 import com.rajdeep.vesper.ui.components.VField
 import com.rajdeep.vesper.ui.components.pressable
 import com.rajdeep.vesper.ui.components.staggerIn
+import com.rajdeep.vesper.ui.components.glassCard
+import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.MarkEmailUnread
+import androidx.compose.material.icons.rounded.Bookmark
+import androidx.compose.material.icons.rounded.Groups
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.lazy.itemsIndexed
 import com.rajdeep.vesper.ui.theme.Motion
 import com.rajdeep.vesper.ui.theme.V
@@ -112,7 +128,8 @@ import javax.inject.Inject
 // ============================================================== Direct list
 
 @HiltViewModel
-class DirectListViewModel @Inject constructor(messages: Messages) : ViewModel() {
+class DirectListViewModel @Inject constructor(messages: Messages, private val session: SessionManager) : ViewModel() {
+    val myName get() = session.current()?.username ?: ""
     val rows = messages.directList().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
     val online = messages.onlineUsers
     val typing = messages.directTypers.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
@@ -123,32 +140,95 @@ fun DirectListScreen(onOpen: (String) -> Unit, onFindPeople: () -> Unit, vm: Dir
     val rows by vm.rows.collectAsState()
     val online by vm.online.collectAsState()
     val typing by vm.typing.collectAsState()
-    Column(Modifier.fillMaxSize().background(V.c.bg).statusBarsPadding()) {
-        ScreenHeader("Direct", "Private · end-to-end encrypted")
-        when {
-            rows == null -> SkeletonRows()
-            rows!!.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Rounded.Lock, null, tint = V.accent, modifier = Modifier.size(40.dp))
-                    Spacer(Modifier.height(18.dp))
-                    GhostButton("Find people", color = V.accent, onClick = onFindPeople)
-                }
+    val accent = V.c.direct
+    val list = rows
+    val unread = list?.sumOf { it.unread } ?: 0
+    val activeNow = list.orEmpty().filter { it.peerId in online && it.peerName != "Notes to self" }.map { it.peerId to (it.peerName ?: "…") }
+    Box(Modifier.fillMaxSize().background(V.c.bg)) {
+        com.rajdeep.vesper.ui.components.Aurora(accent, lerpColor(accent, V.c.success, 0.5f), intensity = 1.5f)
+        LazyColumn(
+            Modifier.fillMaxSize().statusBarsPadding().springOverscroll(), overscrollEffect = null,
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
+        ) {
+            item(key = "head") { InboxHeader(vm.myName, unread, online.size, accent, onFindPeople) }
+            if (activeNow.isNotEmpty()) {
+                item(key = "activeLabel") { com.rajdeep.vesper.ui.components.FadeLabel("Active now", Modifier.animateItem().padding(top = 14.dp, bottom = 10.dp)) }
+                item(key = "active") { com.rajdeep.vesper.ui.components.ActiveStrip(activeNow, accent, onOpen, Modifier.animateItem()) }
             }
-            else -> LazyColumn(Modifier.fillMaxSize().springOverscroll(), overscrollEffect = null) {
-                items(rows!!, key = { it.peerId }) { r ->
-                    Box(Modifier.animateItem(placementSpec = Motion.offsetSpring).staggerIn(rows!!.indexOf(r), r.peerId)) { ConversationItem(r, online = r.peerId in online && r.peerName != "Notes to self", typing = r.peerId in typing) { onOpen(r.peerId) } }
+            item(key = "msgLabel") { com.rajdeep.vesper.ui.components.FadeLabel("Messages", Modifier.animateItem().padding(top = 18.dp, bottom = 8.dp)) }
+            when {
+                list == null -> item(key = "sk") { SkeletonRows() }
+                list.isEmpty() -> item(key = "empty") {
+                    Column(Modifier.fillMaxWidth().padding(top = 60.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Rounded.Lock, null, tint = accent, modifier = Modifier.size(40.dp))
+                        Spacer(Modifier.height(18.dp))
+                        GhostButton("Find people", color = accent, onClick = onFindPeople)
+                    }
+                }
+                else -> itemsIndexed(list, key = { _, r -> r.peerId }) { i, r ->
+                    Box(Modifier.animateItem(placementSpec = Motion.offsetSpring).staggerIn(i, r.peerId).padding(horizontal = 12.dp, vertical = 4.dp)) {
+                        ConversationItem(r, online = r.peerId in online && r.peerName != "Notes to self", typing = r.peerId in typing) { onOpen(r.peerId) }
+                    }
                 }
             }
         }
     }
 }
 
+private fun lerpColor(a: androidx.compose.ui.graphics.Color, b: androidx.compose.ui.graphics.Color, f: Float) = androidx.compose.ui.graphics.lerp(a, b, f)
+
+@Composable
+private fun InboxHeader(name: String, unread: Int, onlineCount: Int, accent: androidx.compose.ui.graphics.Color, onCompose: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp, top = 14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(com.rajdeep.vesper.ui.components.greeting() + if (name.isNotEmpty()) ", $name" else "", style = V.t.label, color = V.c.text2)
+                Text("Inbox", style = V.t.display.copy(fontSize = 38.sp, lineHeight = 42.sp), color = V.c.text)
+            }
+            // Compose: gradient orb that breathes softly.
+            val t = androidx.compose.animation.core.rememberInfiniteTransition(label = "orb")
+            val glow by t.animateFloat(0.25f, 0.55f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1800), androidx.compose.animation.core.RepeatMode.Reverse), label = "g")
+            Box(
+                Modifier.size(52.dp).drawBehind { drawCircle(accent.copy(alpha = glow * 0.5f), radius = size.minDimension * 0.62f) }
+                    .clip(CircleShape)
+                    .background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(accent, androidx.compose.ui.graphics.lerp(accent, androidx.compose.ui.graphics.Color.Black, 0.35f))))
+                    .pressable(scaleTo = 0.9f, onClick = onCompose).semantics { contentDescription = "New message" },
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Rounded.Edit, null, tint = V.c.onAccent, modifier = Modifier.size(22.dp)) }
+        }
+        Spacer(Modifier.height(14.dp))
+        Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+            androidx.compose.animation.AnimatedVisibility(onlineCount > 0, enter = androidx.compose.animation.scaleIn(Motion.bouncy()) + androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.scaleOut() + androidx.compose.animation.fadeOut()) {
+                com.rajdeep.vesper.ui.components.StatChip("$onlineCount online", V.c.success, pulse = true)
+            }
+            androidx.compose.animation.AnimatedVisibility(unread > 0, enter = androidx.compose.animation.scaleIn(Motion.bouncy()) + androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.scaleOut() + androidx.compose.animation.fadeOut()) {
+                com.rajdeep.vesper.ui.components.StatChip("$unread unread", accent, icon = Icons.Rounded.MarkEmailUnread)
+            }
+            com.rajdeep.vesper.ui.components.StatChip("Encrypted", V.c.text2, icon = Icons.Rounded.Lock)
+        }
+    }
+}
+
 @Composable
 private fun ConversationItem(r: ConversationRow, online: Boolean = false, typing: Boolean = false, onClick: () -> Unit) {
-    ListRow(onClick = onClick, leading = { com.rajdeep.vesper.ui.components.PresenceAvatar(r.peerName ?: "?", 48.dp, online) }) {
+    val accent = V.c.direct
+    val hot = r.unread > 0 || typing
+    val edge by androidx.compose.animation.animateColorAsState(if (hot) accent.copy(alpha = 0.45f) else V.c.hairline.copy(alpha = 0.7f), Motion.tw(), label = "edge")
+    val self = r.peerName == "Notes to self"
+    ListRow(
+        modifier = Modifier.glassCard(V.c.s1.copy(alpha = 0.72f), edge, if (hot) accent else null),
+        onClick = onClick,
+        leading = {
+            if (self) Box(
+                Modifier.size(48.dp).clip(CircleShape).background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(accent.copy(alpha = 0.9f), V.c.success.copy(alpha = 0.7f)))),
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Rounded.Bookmark, null, tint = V.c.onAccent, modifier = Modifier.size(22.dp)) }
+            else com.rajdeep.vesper.ui.components.PresenceAvatar(r.peerName ?: "?", 48.dp, online)
+        },
+    ) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(r.peerName ?: "…", style = V.t.subhead, color = V.c.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(r.peerName ?: "…", style = V.t.subhead.copy(fontWeight = if (r.unread > 0) androidx.compose.ui.text.font.FontWeight.SemiBold else V.t.subhead.fontWeight), color = V.c.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (r.lastKind.isNotEmpty()) Text(listDate(r.lastAt), style = V.t.mono.copy(fontSize = V.t.label.fontSize), color = if (r.unread > 0) V.accent else V.c.text3)
             }
             Spacer(Modifier.height(3.dp))
@@ -191,7 +271,8 @@ private fun ConversationItem(r: ConversationRow, online: Boolean = false, typing
 // ============================================================== People
 
 @HiltViewModel
-class PeopleViewModel @Inject constructor(private val repo: PeopleRepository, private val session: SessionManager) : ViewModel() {
+class PeopleViewModel @Inject constructor(private val repo: PeopleRepository, private val session: SessionManager, messages: Messages) : ViewModel() {
+    val online = messages.onlineUsers
     val query = MutableStateFlow("")
     val results = MutableStateFlow<List<UserSummary>?>(null)
     val error = MutableStateFlow<String?>(null)
@@ -226,30 +307,59 @@ class PeopleViewModel @Inject constructor(private val repo: PeopleRepository, pr
 fun PeopleScreen(onProfile: (String) -> Unit, vm: PeopleViewModel = hiltViewModel()) {
     val q by vm.query.collectAsState()
     val res by vm.results.collectAsState()
-    val err by vm.error.collectAsState()
+    val online by vm.online.collectAsState()
     LaunchedEffect(Unit) { vm.search(vm.query.value) }
-    Column(Modifier.fillMaxSize().background(V.c.bg).statusBarsPadding()) {
-        ScreenHeader("People", "Everyone on Vesper", accentDot = false)
-        Row(
-            Modifier.padding(horizontal = 20.dp, vertical = 6.dp).fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(16.dp)).background(V.c.s1).padding(horizontal = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Rounded.Search, null, tint = V.c.text2, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(10.dp))
-            Box(Modifier.weight(1f)) {
-                if (q.isEmpty()) Text("Search by username", style = V.t.body, color = V.c.text3)
-                BasicTextField(q, vm::search, singleLine = true, textStyle = V.t.body.copy(color = V.c.text), cursorBrush = SolidColor(V.c.text), modifier = Modifier.fillMaxWidth())
+    val accent = V.c.text
+    val warm = V.c.hall
+    val cool = V.c.direct
+    val list = res
+    val onlineNow = list.orEmpty().filter { it.id in online && it.id != vm.me }
+    Box(Modifier.fillMaxSize().background(V.c.bg)) {
+        com.rajdeep.vesper.ui.components.Aurora(warm, cool, intensity = 0.9f)
+        LazyColumn(Modifier.fillMaxSize().statusBarsPadding().springOverscroll(), overscrollEffect = null, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)) {
+            item(key = "head") {
+                Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp)) {
+                    Text("Find your people", style = V.t.label, color = V.c.text2)
+                    Text("People", style = V.t.display.copy(fontSize = 38.sp, lineHeight = 42.sp), color = V.c.text)
+                    Spacer(Modifier.height(12.dp))
+                    Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                        com.rajdeep.vesper.ui.components.StatChip("${list?.size ?: 0} members", warm, icon = Icons.Rounded.Groups)
+                        androidx.compose.animation.AnimatedVisibility(online.isNotEmpty(), enter = androidx.compose.animation.scaleIn(Motion.bouncy()) + androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.scaleOut() + androidx.compose.animation.fadeOut()) {
+                            com.rajdeep.vesper.ui.components.StatChip("${online.size} online now", V.c.success, pulse = true)
+                        }
+                    }
+                }
             }
-        }
-        when {
-            res == null -> SkeletonRows()
-            res!!.isEmpty() -> EmptyState("No one by that name", "Usernames use a–z, 0–9, _ and .")
-            else -> LazyColumn(Modifier.fillMaxSize().springOverscroll(), overscrollEffect = null) {
-                itemsIndexed(res!!, key = { _, it -> it.id }) { i, u ->
-                    Box(Modifier.animateItem().staggerIn(i, u.id)) {
-                        ListRow(onClick = { onProfile(u.id) }, leading = { Monogram(u.username, 42.dp) }, trailing = { Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = V.c.text3) }) {
+            item(key = "search") { SearchField(q, vm::search, warm) }
+            if (onlineNow.isNotEmpty() && q.isEmpty()) {
+                item(key = "olabel") { com.rajdeep.vesper.ui.components.FadeLabel("Online now", Modifier.animateItem().padding(top = 6.dp, bottom = 10.dp)) }
+                item(key = "ostrip") { com.rajdeep.vesper.ui.components.ActiveStrip(onlineNow.map { it.id to it.username }, warm, onProfile, Modifier.animateItem()) }
+            }
+            item(key = "alabel") { com.rajdeep.vesper.ui.components.FadeLabel(if (q.isEmpty()) "Everyone" else "Results", Modifier.animateItem().padding(top = 18.dp, bottom = 8.dp)) }
+            when {
+                list == null -> item(key = "sk") { SkeletonRows() }
+                list.isEmpty() -> item(key = "empty") { EmptyState("No one by that name", "Usernames use a–z, 0–9, _ and .", Modifier.padding(top = 40.dp)) }
+                else -> itemsIndexed(list, key = { _, it -> it.id }) { i, u ->
+                    val on = u.id in online
+                    val mine = u.id == vm.me
+                    Box(Modifier.animateItem(placementSpec = Motion.offsetSpring).staggerIn(i, u.id).padding(horizontal = 12.dp, vertical = 4.dp)) {
+                        ListRow(
+                            modifier = Modifier.glassCard(V.c.s1.copy(alpha = 0.72f), V.c.hairline.copy(alpha = 0.7f), if (on) V.c.success else null),
+                            onClick = { onProfile(u.id) },
+                            leading = { com.rajdeep.vesper.ui.components.RingAvatar(u.username, 52.dp, if (mine) cool else warm, on, spinning = on) },
+                            trailing = {
+                                if (on && !mine) com.rajdeep.vesper.ui.components.StatChip("Online", V.c.success, pulse = true)
+                                else Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = V.c.text3)
+                            },
+                        ) {
                             Column(Modifier.weight(1f)) {
-                                Text(u.username + if (u.id == vm.me) "  · you" else "", style = V.t.subhead, color = V.c.text)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(u.username, style = V.t.subhead, color = V.c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                                    if (mine) {
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("you", style = V.t.caption, color = cool, modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(cool.copy(alpha = 0.14f)).padding(horizontal = 6.dp, vertical = 1.dp))
+                                    }
+                                }
                                 Text("Joined " + joined(u.joinedAt), style = V.t.label, color = V.c.text2)
                             }
                         }
@@ -260,7 +370,32 @@ fun PeopleScreen(onProfile: (String) -> Unit, vm: PeopleViewModel = hiltViewMode
     }
 }
 
-private val joinedFmt = SimpleDateFormat("MMMM yyyy", Locale.getDefault())
+@Composable
+private fun SearchField(q: String, onChange: (String) -> Unit, glow: androidx.compose.ui.graphics.Color) {
+    val src = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val focused by src.collectIsFocusedAsState()
+    val edge by androidx.compose.animation.animateColorAsState(if (focused) glow.copy(alpha = 0.6f) else V.c.hairline, Motion.tw(), label = "edge")
+    val lift by androidx.compose.animation.core.animateFloatAsState(if (focused) 1f else 0f, Motion.spring(), label = "lift")
+    Row(
+        Modifier.padding(horizontal = 16.dp, vertical = 14.dp).fillMaxWidth().heightIn(min = 52.dp)
+            .graphicsLayer { scaleX = 1f + 0.01f * lift; scaleY = scaleX }
+            .drawBehind { if (lift > 0f) drawRoundRect(glow.copy(alpha = 0.10f * lift), cornerRadius = androidx.compose.ui.geometry.CornerRadius(24.dp.toPx()), size = size) }
+            .clip(RoundedCornerShape(18.dp)).background(V.c.s1.copy(alpha = 0.85f)).border(1.dp, edge, RoundedCornerShape(18.dp)).padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.Search, null, tint = if (focused) glow else V.c.text2, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Box(Modifier.weight(1f)) {
+            if (q.isEmpty()) Text("Search by username", style = V.t.body, color = V.c.text3)
+            BasicTextField(q, onChange, singleLine = true, textStyle = V.t.body.copy(color = V.c.text), cursorBrush = SolidColor(glow), interactionSource = src, modifier = Modifier.fillMaxWidth())
+        }
+        com.rajdeep.vesper.ui.components.Reveal(q.isNotEmpty(), enter = androidx.compose.animation.scaleIn(Motion.bouncy()) + androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.scaleOut() + androidx.compose.animation.fadeOut()) {
+            Icon(Icons.Rounded.Close, "Clear", tint = V.c.text2, modifier = Modifier.size(20.dp).clip(CircleShape).pressable { onChange("") })
+        }
+    }
+}
+
+private val joinedFmt = java.text.SimpleDateFormat("MMM yyyy", java.util.Locale.getDefault())
 fun joined(ms: Long) = if (ms <= 0) "recently" else joinedFmt.format(Date(ms))
 
 // ============================================================== Profile

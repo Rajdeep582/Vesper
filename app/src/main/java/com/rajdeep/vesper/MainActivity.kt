@@ -1,5 +1,15 @@
 package com.rajdeep.vesper
 
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.outlined.Insights
+import androidx.compose.material.icons.outlined.Face
+import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.Inbox
+import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.rounded.Face
+import androidx.compose.material.icons.rounded.Groups
+import androidx.compose.material.icons.rounded.Inbox
 import androidx.compose.runtime.remember
 import androidx.compose.ui.zIndex
 import com.rajdeep.vesper.ui.components.Reveal
@@ -121,12 +131,13 @@ import javax.inject.Inject
 @Serializable data class ProfileRoute(val id: String)
 @Serializable data class MemberRoute(val id: String)
 
-enum class Tab(val label: String, val icon: ImageVector, val space: Space) {
-    HALL("Hall", Icons.Rounded.Forum, Space.HALL),
-    DIRECT("Direct", Icons.Rounded.Lock, Space.DIRECT),
-    PEOPLE("People", Icons.Rounded.People, Space.NEUTRAL),
-    YOU("You", Icons.Rounded.AccountCircle, Space.NEUTRAL),
-    CONSOLE("Console", Icons.Rounded.Insights, Space.CONSOLE),
+/** Each tab has an outline icon (resting) and a filled one (selected) with the same meaning. */
+enum class Tab(val label: String, val icon: ImageVector, val outline: ImageVector, val space: Space) {
+    HALL("Hall", Icons.Rounded.Forum, androidx.compose.material.icons.Icons.Outlined.Forum, Space.HALL),
+    DIRECT("Inbox", Icons.Rounded.Inbox, androidx.compose.material.icons.Icons.Outlined.Inbox, Space.DIRECT),
+    PEOPLE("People", Icons.Rounded.Groups, androidx.compose.material.icons.Icons.Outlined.Groups, Space.NEUTRAL),
+    YOU("You", Icons.Rounded.Face, androidx.compose.material.icons.Icons.Outlined.Face, Space.NEUTRAL),
+    CONSOLE("Console", Icons.Rounded.Insights, androidx.compose.material.icons.Icons.Outlined.Insights, Space.CONSOLE),
 }
 
 @AndroidEntryPoint
@@ -314,10 +325,18 @@ class MainActivity : ComponentActivity() {
                         ) {
                             Box {
                                 val pop by androidx.compose.animation.core.animateFloatAsState(if (sel) 1.12f else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.45f, stiffness = 500f), label = "pop")
-                                Icon(t.icon, null, tint = tint, modifier = Modifier.size(22.dp).graphicsLayer { scaleX = pop; scaleY = pop; translationY = (pop - 1f) * -10f })
+                                // Outline ↔ filled morph: the filled glyph scales up out of the outline when selected.
+                                val fill by androidx.compose.animation.core.animateFloatAsState(if (sel) 1f else 0f, androidx.compose.animation.core.spring(dampingRatio = 0.6f, stiffness = 520f), label = "fill")
+                                Box(Modifier.size(24.dp).graphicsLayer { scaleX = pop; scaleY = pop; translationY = (pop - 1f) * -10f }, contentAlignment = Alignment.Center) {
+                                    Icon(t.outline, null, tint = tint, modifier = Modifier.size(23.dp).graphicsLayer { alpha = 1f - fill; scaleX = 1f - 0.15f * fill; scaleY = scaleX })
+                                    Icon(t.icon, null, tint = tint, modifier = Modifier.size(23.dp).graphicsLayer { alpha = fill; scaleX = 0.6f + 0.4f * fill; scaleY = scaleX })
+                                }
                                 if (t == Tab.DIRECT) {
-                                    Reveal(unread > 0, modifier = Modifier.align(Alignment.TopEnd).offset(x = 6.dp, y = (-3).dp), enter = scaleIn(Motion.bouncy()), exit = scaleOut()) {
-                                        Box(Modifier.size(9.dp).clip(CircleShape).background(V.c.direct).border(1.5.dp, V.c.s1, CircleShape))
+                                    Reveal(unread > 0, modifier = Modifier.align(Alignment.TopEnd).offset(x = 9.dp, y = (-5).dp), enter = scaleIn(Motion.bouncy()) + androidx.compose.animation.fadeIn(), exit = scaleOut() + androidx.compose.animation.fadeOut()) {
+                                        Box(
+                                            Modifier.heightIn(min = 16.dp).clip(CircleShape).background(V.c.direct).border(1.5.dp, V.c.s1, CircleShape).padding(horizontal = 4.dp),
+                                            contentAlignment = Alignment.Center,
+                                        ) { Text(if (unread > 99) "99+" else unread.toString(), style = V.t.caption.copy(fontSize = 9.sp, lineHeight = 10.sp), color = V.c.onAccent) }
                                     }
                                 }
                             }
