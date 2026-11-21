@@ -220,7 +220,9 @@ class Messages @Inject constructor(
             media.purge(mediaIds)
         }
         val hall = rows.filter { it.scope == Scope.HALL }.mapNotNull { it.serverId }
-        val direct = rows.filter { it.scope == Scope.DIRECT && it.outgoing }.mapNotNull { it.serverId }
+        // Pending (never reached the server) and Notes-to-self rows only need the local delete above.
+        val direct = rows.filter { it.scope == Scope.DIRECT && it.outgoing }.mapNotNull { it.serverId }.filterNot { it.startsWith("self:") }
+        runCatching { backup.forget(direct) }
         if (hall.isNotEmpty()) {
             runCatching {
                 api.post("/v1/hall/delete", com.rajdeep.vesper.shared.BackupIds(hall), com.rajdeep.vesper.shared.BackupIds.serializer(), com.rajdeep.vesper.shared.Ok.serializer())

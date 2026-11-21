@@ -593,19 +593,37 @@ fun ChatScreen(
         }
     }
     deleteAsk?.let { ids ->
-        val rows = items.filter { it.localId in ids }
-        // Everyone: all chosen must be mine and on the server — or, in the Hall, the admin may remove anything.
-        val canEveryone = rows.isNotEmpty() && rows.all { it.serverId != null && (it.outgoing || (vm.isAdmin && vm.scope == Scope.HALL)) }
-        ModalBottomSheet(onDismissRequest = { deleteAsk = null }, containerColor = V.c.s1) {
-            SheetTitle(
-                if (ids.size == 1) "Delete message?" else "Delete ${ids.size} messages?",
-                if (canEveryone) "Delete for everyone removes it from the server and every phone." else "Only your own sent messages can be deleted for everyone.",
-            )
-            DeleteChoice(Icons.Rounded.Delete, "Delete for me", "Removes from this phone only", V.c.text) {
-                vm.deleteLocal(ids); vm.error.value = "Deleted for you"; deleteAsk = null; selected.clear()
+        // Snapshot rows when the sheet opens so a message changing state (upload finishing, receipt) can't flip the options mid-sheet.
+        val rows = remember(ids) { items.filter { it.localId in ids } }
+        val self = vm.peer != null && vm.peer == vm.myId
+        // Everyone works for any mix of text / photo / voice: own messages (sent or still pending), or anything in the Hall for the admin.
+        fun eligible(r: MessageEntity) = r.state != MsgState.SYSTEM && (r.outgoing || r.senderId == vm.myId || (vm.isAdmin && vm.scope == Scope.HALL))
+        val canEveryone = !self && rows.isNotEmpty() && rows.all(::eligible)
+        val n = rows.size.coerceAtLeast(ids.size)
+        val what = run {
+            val k = rows.map { it.kind }.toSet()
+            when {
+                k.size > 1 -> if (n == 1) "message" else "messages"
+                MessageKind.IMAGE.name in k -> if (n == 1) "photo" else "photos"
+                MessageKind.VOICE.name in k -> if (n == 1) "voice message" else "voice messages"
+                else -> if (n == 1) "message" else "messages"
             }
+        }
+        fun done(msg: String) { deleteAsk = null; selected.clear(); vm.error.value = msg }
+        ModalBottomSheet(onDismissRequest = { deleteAsk = null }, containerColor = V.c.s1, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+            SheetTitle(
+                if (n == 1) "Delete $what?" else "Delete $n $what?",
+                when {
+                    self -> "Notes to self live only on this phone."
+                    canEveryone -> "Delete for everyone removes it from the server and every phone."
+                    else -> "Only your own messages can be deleted for everyone."
+                },
+            )
             if (canEveryone) DeleteChoice(Icons.Rounded.DeleteForever, "Delete for everyone", "Gone from the server and all phones", V.c.error) {
-                vm.deleteForEveryone(ids); deleteAsk = null; selected.clear()
+                vm.deleteForEveryone(ids); done(if (n == 1) "Deleted for everyone" else "$n deleted for everyone")
+            }
+            DeleteChoice(Icons.Rounded.Delete, if (self) "Delete" else "Delete for me", if (self) "Removes it from this phone" else "Removes from this phone only", if (self) V.c.error else V.c.text) {
+                vm.deleteLocal(ids); done(if (self) "Deleted" else "Deleted for you")
             }
             Spacer(Modifier.height(28.dp))
         }

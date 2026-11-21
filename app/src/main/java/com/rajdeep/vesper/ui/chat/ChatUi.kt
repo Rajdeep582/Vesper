@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -341,7 +342,7 @@ fun MessageBubble(
                                 }
                             }
                             MessageKind.IMAGE -> Column {
-                                m.ref?.let { ImageContent(it, onClick = { onImage(it) }) }
+                                m.ref?.let { ImageContent(it, onClick = { onImage(it) }, onLongPress = onLongPress) }
                                 Meta(m, fraction, Modifier.align(Alignment.End).padding(horizontal = 10.dp, vertical = 6.dp))
                             }
                             MessageKind.VOICE -> Column(Modifier.padding(start = 8.dp, end = 12.dp, top = if (m.replyRef != null) 3.dp else 8.dp, bottom = 6.dp)) {
@@ -350,6 +351,10 @@ fun MessageBubble(
                             }
                         }
                     }
+                    // Selection mode: one shield over the whole bubble so text, photo and voice all toggle the same way.
+                    if (selecting) Box(
+                        Modifier.matchParentSize().combinedClickable(remember { MutableInteractionSource() }, null, onLongClick = onToggle, onClick = onToggle)
+                    )
                 }
                 if (m.state == MsgState.FAILED) {
                     Text(
@@ -522,7 +527,8 @@ private fun SystemLine(text: String) {
 }
 
 @Composable
-private fun ImageContent(ref: MediaRef, onClick: () -> Unit) {
+@OptIn(ExperimentalFoundationApi::class)
+private fun ImageContent(ref: MediaRef, onClick: () -> Unit, onLongPress: () -> Unit = {}) {
     val host = LocalMediaHost.current
     val ratio = ((ref.width ?: 4).toFloat() / (ref.height ?: 3).coerceAtLeast(1)).coerceIn(0.62f, 1.7f)
     val placeholder = remember(ref.blurhash) { ref.blurhash?.let { BlurHash.decode(it, 24, 24)?.asImageBitmap() } }
@@ -536,7 +542,10 @@ private fun ImageContent(ref: MediaRef, onClick: () -> Unit) {
     }
     val reveal by animateFloatAsState(if (image != null) 1f else 0f, tween(Motion.L, easing = Motion.Emphasized), label = "reveal")
     val w = (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp * 0.66f).dp.coerceAtMost(300.dp)
-    Box(Modifier.width(w).aspectRatio(ratio).background(V.c.s3).pressable(scaleTo = 0.98f, onClick = onClick)) {
+    val src = remember { MutableInteractionSource() }
+    val down by src.collectIsPressedAsState()
+    val pScale by animateFloatAsState(if (down) 0.975f else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.7f, stiffness = 700f), label = "imgPress")
+    Box(Modifier.width(w).aspectRatio(ratio).graphicsLayer { scaleX = pScale; scaleY = pScale }.background(V.c.s3).combinedClickable(src, null, onClick = onClick, onLongClick = onLongPress)) {
         placeholder?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
         image?.let { Image(it, "Photo", Modifier.fillMaxSize().graphicsLayer { alpha = reveal; scaleX = 1.04f - 0.04f * reveal; scaleY = scaleX }, contentScale = ContentScale.Crop) }
         if (image == null) {
@@ -623,18 +632,20 @@ fun Waveform(levels: List<Int>, progress: Float, active: Color, idle: Color, mod
     val fbW = V.fb
     val thumb by animateFloatAsState(if (scrub != null) 1f else 0f, androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 600f), label = "thumb")
     val shown = scrub ?: progress
+    val longPressNow by androidx.compose.runtime.rememberUpdatedState(onLongPress)
+    val seekNow by androidx.compose.runtime.rememberUpdatedState(onSeek)
     Canvas(
         modifier.then(
             if (onSeek != null || onLongPress != null) Modifier.pointerInput(Unit) {
                 detectTapGestures(
-                    onTap = { fbW.tick(); onSeek?.invoke((it.x / size.width).coerceIn(0f, 1f)) },
-                    onLongPress = { onLongPress?.invoke() },
+                    onTap = { fbW.tick(); seekNow?.invoke((it.x / size.width).coerceIn(0f, 1f)) },
+                    onLongPress = { longPressNow?.invoke() },
                 )
             }.then(
                 if (onSeek != null) Modifier.pointerInput(Unit) {
                     detectHorizontalDragGestures(
                         onDragStart = { o -> scrub = (o.x / size.width).coerceIn(0f, 1f); fbW.tick() },
-                        onDragEnd = { scrub?.let(onSeek); scrub = null },
+                        onDragEnd = { scrub?.let { f -> seekNow?.invoke(f) }; scrub = null },
                         onDragCancel = { scrub = null },
                     ) { change, _ -> change.consume(); scrub = (change.position.x / size.width).coerceIn(0f, 1f) }
                 } else Modifier
