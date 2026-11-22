@@ -165,6 +165,47 @@ class Messages @Inject constructor(
 
     fun hall(): Flow<List<MessageEntity>> = dao.hall()
     fun direct(peer: String): Flow<List<MessageEntity>> = dao.direct(peer)
+    fun pins(peer: String?): Flow<List<MessageEntity>> = if (peer == null) dao.hallPins() else dao.directPins(peer)
+
+    /**
+     * Pin (days in [com.rajdeep.vesper.shared.Pins.DAYS]) or unpin (days = 0). Notes to self stays on this phone;
+     * everything else goes through the server, which tells every device in the chat.
+     */
+    suspend fun pin(m: MessageEntity, days: Int) {
+        val sid = m.serverId ?: error("Wait until it's sent")
+        val s = me()
+        val now = session.now()
+        if (sid.startsWith("self:")) {
+            if (days == 0) { dao.unpin(sid); return }
+            val active = dao.activePins(Scope.DIRECT, m.peerId ?: "", now).filter { it.serverId != sid }
+            active.take((active.size - (com.rajdeep.vesper.shared.Pins.MAX_PER_CHAT - 1)).coerceAtLeast(0)).forEach { it.serverId?.let { x -> dao.unpin(x) } }
+            dao.pin(sid, now + days * com.rajdeep.vesper.shared.Pins.DAY_MS, s.username, now)
+            return
+        }
+        api.post(
+            "/v1/pins", com.rajdeep.vesper.shared.PinRequest(sid, if (m.scope == Scope.DIRECT) m.peerId else null, days),
+            com.rajdeep.vesper.shared.PinRequest.serializer(), Ok.serializer(),
+        )
+        // The server's pin.changed frame updates every device; apply here too so it shows even if the socket lags.
+        if (days == 0) dao.unpin(sid) else {
+            if (dao.get(m.localId)?.pinnedUntil == null) {
+                val active = dao.activePins(m.scope, if (m.scope == Scope.DIRECT) m.peerId ?: "" else "", now).filter { it.serverId != sid }
+                active.take((active.size - (com.rajdeep.vesper.shared.Pins.MAX_PER_CHAT - 1)).coerceAtLeast(0)).forEach { it.serverId?.let { x -> dao.unpin(x) } }
+            }
+            dao.pin(sid, now + days * com.rajdeep.vesper.shared.Pins.DAY_MS, s.username, now)
+        }
+    }
+
+    /** Catch up pins that changed while this phone was offline. */
+    suspend fun syncPins() {
+        val list = api.get("/v1/pins", com.rajdeep.vesper.shared.PinList.serializer())
+        list.hall.forEach { p -> p.msg?.let { storeHall(it, live = false, quiet = true) }; dao.pin(p.mid, p.until, p.byName, p.at) }
+        list.direct.forEach { p -> dao.pin(p.mid, p.until, p.byName, p.at) }
+        val keepHall = list.hall.map { it.mid }.toSet()
+        val keepDirect = list.direct.map { it.mid }.toSet()
+        dao.pinnedServerIds(Scope.HALL).filter { it !in keepHall }.forEach { dao.unpin(it) }
+        dao.pinnedServerIds(Scope.DIRECT).filter { it !in keepDirect }.forEach { dao.unpin(it) }
+    }
     fun conversations() = dao.conversations()
     fun unreadDirect() = dao.unreadDirect()
 
@@ -460,6 +501,7 @@ class Messages @Inject constructor(
             launch { runCatching { syncHall() } }
             launch { runCatching { syncDirect() }; runCatching { syncReceipts() } }
             launch { runCatching { syncContacts() } }
+            launch { runCatching { syncPins() } }
             launch { runCatching { onlineCount() } }
         }
         runCatching { maintainPreKeys() }
@@ -469,6 +511,7 @@ class Messages @Inject constructor(
         runCatching { syncHall() }
         runCatching { syncDirect() }
         runCatching { syncReceipts() }
+        runCatching { syncPins() }
     }
 
     suspend fun syncHall() = syncLock.withLock {
@@ -524,13 +567,14 @@ class Messages @Inject constructor(
                 dao.deleteDirectByServerIds(f.mids)
             }
             is com.rajdeep.vesper.shared.DirectSeen -> dao.markSeen(f.mids)
+            is com.rajdeep.vesper.shared.PinChanged -> f.pin?.let { dao.pin(f.mid, it.until, it.byName, it.at) } ?: dao.unpin(f.mid)
             is HallMuted -> _hallMutedUntil.value = f.until?.takeIf { it > 0 } ?: if (f.until == null) Long.MAX_VALUE else null
             is AccountEnded -> session.end(f.reason)
             else -> {}
         }
     }
 
-    private suspend fun storeHall(m: HallMessageDto, live: Boolean) {
+    private suspend fun storeHall(m: HallMessageDto, live: Boolean, quiet: Boolean = false) {
         val s = session.current() ?: return
         // "Delete for me" in the Hall: never re-download it on later syncs.
         if (db.kv().get("hid:${m.id}") != null) return
@@ -550,7 +594,7 @@ class Messages @Inject constructor(
                 expiresAt = m.expiresAt, seq = m.seq,
             ),
         )
-        if (inserted != -1L && m.senderId != s.userId) {
+        if (inserted != -1L && m.senderId != s.userId && !quiet) {
             if (live) _events.tryEmit(ChatEvent.Incoming(Scope.HALL, null))
             notifier.hall(m.senderName, m.kind, m.body.text, m.id, m.expiresAt)
         }

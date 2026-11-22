@@ -98,6 +98,7 @@ class Services(val cfg: Config, val db: Db) {
     val push = Push(db, cfg)
     val hall = Hall(db, hub, atRest, media, activity, names, push)
     val direct = Direct(db, hub, media, activity, accounts, names, push)
+    val pins = Pinning(db, hub, hall, names)
     val keepAlive = KeepAlive()
     val sweeper = Sweeper(db, media, hub)
     val backups = Backups(db)
@@ -245,6 +246,8 @@ private fun Route.memberRoutes(s: Services) {
     post("/backup/items") { s.backups.put(call.caller().uid, call.receive<BackupItems>().items); call.respond(Ok()) }
     post("/backup/delete") { s.backups.delete(call.caller().uid, call.receive<BackupIds>().ids); call.respond(Ok()) }
     get("/direct/contacts") { call.respond(s.direct.contacts(call.caller())) }
+    get("/pins") { call.respond(s.pins.list(call.caller())) }
+    post("/pins") { call.respond(s.pins.set(call.caller(), call.receive<com.rajdeep.vesper.shared.PinRequest>())) }
     post("/direct/unsend") { s.direct.unsend(call.caller(), call.receive<BackupIds>().ids); call.respond(Ok()) }
     /** Hall delete for everyone: your own messages, or any message if you are the admin. */
     post("/hall/delete") {

@@ -343,6 +343,8 @@ sealed interface Frame
 @Serializable @SerialName("presence") data class Presence(val userId: String, val online: Boolean, val lastActiveAt: Long = 0) : Frame
 /** Server → client, right after connecting: everyone online now. */
 @Serializable @SerialName("presence.snapshot") data class PresenceSnapshot(val online: List<String>) : Frame
+/** Server → client: a message was pinned (pin != null) or unpinned. Direct: [peerId] is the other person in your chat. */
+@Serializable @SerialName("pin.changed") data class PinChanged(val mid: String, val peerId: String? = null, val pin: PinDto? = null) : Frame
 @Serializable @SerialName("ping") data class Ping(val at: Long = 0) : Frame
 
 @Serializable @SerialName("pong") data class Pong(val serverTime: Long) : Frame
@@ -378,3 +380,16 @@ object Keep { const val FOREVER_MS = 100L * 365 * 24 * 3_600_000 }
 @Serializable data class BackupKeyLookup(val username: String, val password: String)
 
 @Serializable data class OnlineCount(val count: Int)
+
+// ---------------------------------------------------------------- pinned messages (Hall + private chats)
+/** WhatsApp-style pins: up to [MAX_PER_CHAT] per chat; the oldest pin is replaced. A pinned message (and its media) is
+ *  kept until the pin ends, then falls back to its normal expiry (deleted at once if that has already passed). */
+object Pins {
+    val DAYS = listOf(1, 3, 7)
+    const val MAX_PER_CHAT = 3
+    const val DAY_MS = 24L * 60 * 60 * 1000
+}
+/** days = 0 unpins. peerId = null for the Hall. */
+@Serializable data class PinRequest(val mid: String, val peerId: String? = null, val days: Int = 0)
+@Serializable data class PinDto(val mid: String, val peerId: String? = null, val until: Long, val byUserId: String, val byName: String, val at: Long, val msg: HallMessageDto? = null)
+@Serializable data class PinList(val hall: List<PinDto> = emptyList(), val direct: List<PinDto> = emptyList(), val serverTime: Long = 0)

@@ -55,6 +55,12 @@ data class MessageEntity(
     /** Encrypted blob staged for upload (pending media) — app-private, ciphertext only. */
     val stagedBlob: String? = null,
     val replyJson: String? = null,
+    /** Pinned until (local clock-adjusted server ms); null = not pinned. While pinned, [expiresAt] = max(base, pin). */
+    val pinnedUntil: Long? = null,
+    val pinnedBy: String? = null,
+    val pinnedAt: Long? = null,
+    /** The message's own expiry while a pin extends [expiresAt]. */
+    val baseExpiresAt: Long? = null,
 )
 
 @Entity(tableName = "users")
@@ -188,6 +194,29 @@ interface MessageDao {
     @Query("SELECT MAX(seq) FROM messages WHERE scope='hall'")
     suspend fun maxHallSeq(): Long?
 
+    @Query("SELECT * FROM messages WHERE scope = 'hall' AND pinnedUntil IS NOT NULL ORDER BY pinnedAt DESC")
+    fun hallPins(): Flow<List<MessageEntity>>
+
+    @Query("SELECT * FROM messages WHERE scope = 'direct' AND peerId = :peer AND pinnedUntil IS NOT NULL ORDER BY pinnedAt DESC")
+    fun directPins(peer: String): Flow<List<MessageEntity>>
+
+    @Query("SELECT * FROM messages WHERE scope = :scope AND COALESCE(peerId, '') = :peer AND pinnedUntil > :now ORDER BY pinnedAt ASC")
+    suspend fun activePins(scope: String, peer: String, now: Long): List<MessageEntity>
+
+    @Query(
+        """UPDATE messages SET pinnedUntil = :until, pinnedBy = :by, pinnedAt = :at,
+           baseExpiresAt = COALESCE(baseExpiresAt, expiresAt),
+           expiresAt = CASE WHEN COALESCE(baseExpiresAt, expiresAt) IS NULL THEN NULL ELSE MAX(COALESCE(baseExpiresAt, expiresAt), :until) END
+           WHERE serverId = :sid""",
+    )
+    suspend fun pin(sid: String, until: Long, by: String, at: Long)
+
+    @Query("UPDATE messages SET pinnedUntil = NULL, pinnedBy = NULL, pinnedAt = NULL, expiresAt = COALESCE(baseExpiresAt, expiresAt), baseExpiresAt = NULL WHERE serverId = :sid")
+    suspend fun unpin(sid: String)
+
+    @Query("SELECT serverId FROM messages WHERE scope = :scope AND pinnedUntil IS NOT NULL AND serverId IS NOT NULL AND serverId NOT LIKE 'self:%'")
+    suspend fun pinnedServerIds(scope: String): List<String>
+
     @Query("SELECT mediaJson FROM messages WHERE mediaJson IS NOT NULL")
     suspend fun allMediaJson(): List<String>
 }
@@ -246,12 +275,21 @@ val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
     }
 }
 
+val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE messages ADD COLUMN pinnedUntil INTEGER DEFAULT NULL")
+        db.execSQL("ALTER TABLE messages ADD COLUMN pinnedBy TEXT DEFAULT NULL")
+        db.execSQL("ALTER TABLE messages ADD COLUMN pinnedAt INTEGER DEFAULT NULL")
+        db.execSQL("ALTER TABLE messages ADD COLUMN baseExpiresAt INTEGER DEFAULT NULL")
+    }
+}
+
 @Database(
     entities = [
         MessageEntity::class, UserEntity::class, KvEntity::class, IdentityEntity::class, PreKeyEntity::class,
         SignedPreKeyEntity::class, KyberPreKeyEntity::class, KyberUsedEntity::class, SessionEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class VesperDatabase : RoomDatabase() {

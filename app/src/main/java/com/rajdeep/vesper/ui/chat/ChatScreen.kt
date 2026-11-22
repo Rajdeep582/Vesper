@@ -14,6 +14,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.NotificationsOff
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.calculateCentroid
@@ -106,6 +107,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -203,6 +205,12 @@ class ChatViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val peerOnline: StateFlow<Boolean> = messages.onlineUsers.map { peer != null && peer != myId && peer in it }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
     fun typing(on: Boolean) = messages.typing(peer, on)
+    val pins: StateFlow<List<MessageEntity>> = messages.pins(peer).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    fun pin(m: MessageEntity, days: Int) = viewModelScope.launch {
+        runCatching { messages.pin(m, days) }
+            .onSuccess { error.value = if (days == 0) "Unpinned" else "Pinned for " + (if (days == 1) "24 hours" else "$days days") }
+            .onFailure { e -> error.value = e.message ?: "Couldn't update pin" }
+    }
     val peerLastSeen: StateFlow<Long?> = messages.lastSeen.map { peer?.let { p -> it[p] } }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
     val chatMuted: StateFlow<Boolean> = settings.prefs.map { peer != null && peer in it.mutedPeers }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     fun setChatMuted(v: Boolean) = viewModelScope.launch { peer?.let { settings.setPeerMuted(it, v); if (v) notifier.cancelFor(it) } }
@@ -391,6 +399,12 @@ fun ChatScreen(
     androidx.activity.compose.BackHandler(enabled = selecting && tabActive) { selected.clear() }
     LaunchedEffect(items) { val ids = items.map { it.localId }.toSet(); selected.retainAll { it in ids } }
     var viewer by remember { mutableStateOf<MediaRef?>(null) }
+    val pinRows by vm.pins.collectAsState()
+    val activePins = remember(pinRows, now) { pinRows.filter { (it.pinnedUntil ?: 0) > now } }
+    var pinAsk by remember { mutableStateOf<MessageEntity?>(null) }
+    var pinMenu by remember { mutableStateOf<MessageEntity?>(null) }
+    var flashId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(flashId) { if (flashId != null) { kotlinx.coroutines.delay(1_600); flashId = null } }
     var attachOpen by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -514,6 +528,14 @@ fun ChatScreen(
                         onDelete = { fb.press(); deleteAsk = selected.toList() },
                         onReply = if (chosen.size == 1) ({ vm.setReply(chosen.first()); selected.clear() }) else null,
                         onDetails = if (chosen.size == 1) ({ menuFor = chosen.first(); selected.clear() }) else null,
+                        pinned = chosen.size == 1 && (chosen.first().pinnedUntil ?: 0) > now,
+                        onPin = chosen.singleOrNull()?.takeIf { it.state != MsgState.SYSTEM && it.serverId != null && it.state != MsgState.PENDING && it.state != MsgState.FAILED }?.let { c ->
+                            {
+                                fb.press()
+                                if ((c.pinnedUntil ?: 0) > now) vm.pin(c, 0) else pinAsk = c
+                                selected.clear()
+                            }
+                        },
                     )
                 }
             }
@@ -529,6 +551,19 @@ fun ChatScreen(
                 link == Link.CONNECTING -> "Connecting…"
                 else -> "Offline — messages will send when you're back"
             })
+            androidx.compose.animation.AnimatedVisibility(
+                activePins.isNotEmpty() && searchQ == null,
+                enter = fadeIn(Motion.tw(Motion.M)) + androidx.compose.animation.expandVertically(Motion.spring()),
+                exit = fadeOut(Motion.tw(Motion.S)) + androidx.compose.animation.shrinkVertically(Motion.tw(Motion.S)),
+            ) {
+                PinnedBar(activePins, now,
+                    onJump = { p ->
+                        val idx = items.indexOfFirst { it.localId == p.localId }
+                        if (idx >= 0) scope.launch { listState.animateScrollToItem(idx, -160); flashId = p.localId }
+                    },
+                    onActions = { pinMenu = it },
+                )
+            }
             val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
             val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
             val density = LocalDensity.current
@@ -567,7 +602,7 @@ fun ChatScreen(
                                 onLongPress = { fb.longPress(); if (m.state != MsgState.SYSTEM) { if (m.localId !in selected) selected.add(m.localId) } },
                                 onImage = { if (selecting) toggle(m) else viewer = it },
                                 onRetry = { vm.retry(m.localId) },
-                                highlighted = m.localId == hitId,
+                                highlighted = m.localId == hitId || m.localId == flashId,
                                 selecting = selecting,
                                 selected = m.localId in selected,
                                 onToggle = { toggle(m) },
@@ -823,6 +858,29 @@ fun ChatScreen(
         }
     }
 
+    pinAsk?.let { m ->
+        ModalBottomSheet(onDismissRequest = { pinAsk = null }, containerColor = V.c.s1, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+            PinDurationPicker(onPin = { d -> fb.press(); vm.pin(m, d); pinAsk = null }, onCancel = { pinAsk = null })
+        }
+    }
+    pinMenu?.let { m ->
+        ModalBottomSheet(onDismissRequest = { pinMenu = null }, containerColor = V.c.s1) {
+            SheetTitle("Pinned message", buildString {
+                append(pinPreview(m).take(120))
+                m.pinnedBy?.let { append("\nPinned by $it") }
+                m.pinnedUntil?.let { append(" · until " + clockFull(it)) }
+            })
+            SheetAction("Go to message") {
+                pinMenu = null
+                val idx = items.indexOfFirst { it.localId == m.localId }
+                if (idx >= 0) scope.launch { listState.animateScrollToItem(idx, -160); flashId = m.localId }
+            }
+            SheetAction("Change duration") { pinMenu = null; pinAsk = m }
+            SheetAction("Unpin", danger = true) { pinMenu = null; vm.pin(m, 0) }
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+
     menuFor?.let { m ->
         val clipboard = LocalClipboard.current
         ModalBottomSheet(onDismissRequest = { menuFor = null }, containerColor = V.c.s1) {
@@ -831,7 +889,8 @@ fun ChatScreen(
                 if (m.outgoing) "Your message" else m.senderName,
                 buildString {
                     append(if (m.acceptedAt != null) "Sent " + clockFull(m.acceptedAt) else "Waiting to send — the countdown starts once the server accepts it")
-                    m.expiresAt?.let { append("\nDisappears " + clockFull(it)) }
+                    m.pinnedUntil?.takeIf { it > now }?.let { append("\nPinned until " + clockFull(it)) }
+                    (m.baseExpiresAt ?: m.expiresAt)?.let { append("\nDisappears " + clockFull(maxOf(it, m.pinnedUntil?.takeIf { p -> p > now } ?: 0))) }
                 },
             )
             if (kind == MessageKind.FILE && m.ref != null) {
@@ -1140,7 +1199,7 @@ private fun DeleteChoice(icon: androidx.compose.ui.graphics.vector.ImageVector, 
 }
 
 @Composable
-private fun SelectionBar(count: Int, canCopy: Boolean, onClose: () -> Unit, onCopy: () -> Unit, onDelete: () -> Unit, onReply: (() -> Unit)?, onDetails: (() -> Unit)?) {
+private fun SelectionBar(count: Int, canCopy: Boolean, onClose: () -> Unit, onCopy: () -> Unit, onDelete: () -> Unit, onReply: (() -> Unit)?, onDetails: (() -> Unit)?, pinned: Boolean = false, onPin: (() -> Unit)? = null) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).height(56.dp).clip(RoundedCornerShape(28.dp))
             .background(androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(V.accent.copy(alpha = 0.16f), V.c.s2)))
@@ -1159,9 +1218,19 @@ private fun SelectionBar(count: Int, canCopy: Boolean, onClose: () -> Unit, onCo
         ) { n -> Text(n.toString(), style = V.t.title.copy(fontFamily = com.rajdeep.vesper.ui.theme.Mono), color = V.accent, maxLines = 1, softWrap = false) }
         Spacer(Modifier.weight(1f))
         if (onReply != null) BarIcon(androidx.compose.material.icons.Icons.AutoMirrored.Rounded.Reply, "Reply", V.c.text, onReply)
+        if (onPin != null) PinBarIcon(pinned, onPin)
         if (onDetails != null) BarIcon(Icons.Rounded.Info, "Details", V.c.text2, onDetails)
         if (canCopy) BarIcon(Icons.Rounded.ContentCopy, "Copy", V.c.text, onCopy)
         BarIcon(Icons.Rounded.Delete, "Delete", V.c.error, onDelete)
+    }
+}
+
+@Composable
+private fun PinBarIcon(pinned: Boolean, onClick: () -> Unit) {
+    Box(Modifier.size(44.dp).clip(CircleShape).pressable(scaleTo = 0.88f, onClick = onClick).semantics { contentDescription = if (pinned) "Unpin" else "Pin" }, contentAlignment = Alignment.Center) {
+        Icon(Icons.Rounded.PushPin, null, tint = if (pinned) V.accent else V.c.text, modifier = Modifier.size(21.dp).rotate(35f))
+        // Unpin = pin with a slash, like WhatsApp.
+        if (pinned) Box(Modifier.width(2.dp).height(26.dp).rotate(-45f).background(V.accent))
     }
 }
 

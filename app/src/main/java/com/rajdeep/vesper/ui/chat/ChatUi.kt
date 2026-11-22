@@ -1,6 +1,7 @@
 package com.rajdeep.vesper.ui.chat
 
 import androidx.compose.material.icons.rounded.AttachFile
+import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Description
@@ -396,6 +397,9 @@ private fun Meta(m: MessageEntity, fraction: Float, modifier: Modifier = Modifie
     Row(modifier.padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         if (m.text != null && com.rajdeep.vesper.ui.text.MessageText.isForever(m.text)) {
             Icon(androidx.compose.material.icons.Icons.Rounded.AllInclusive, "Kept forever", tint = V.accent, modifier = Modifier.size(14.dp))
+        }
+        if ((m.pinnedUntil ?: 0) > System.currentTimeMillis()) {
+            Icon(androidx.compose.material.icons.Icons.Rounded.PushPin, "Pinned", tint = V.c.text3, modifier = Modifier.size(12.dp).graphicsLayer { rotationZ = 35f })
         }
         Text(clock(m.acceptedAt ?: m.createdAt), style = V.t.mono.copy(fontSize = V.t.caption.fontSize), color = V.c.text3)
         if (m.outgoing) {
@@ -1591,6 +1595,12 @@ private fun fileTint(ext: String): androidx.compose.ui.graphics.Color = when (ex
 /** Opens a ready file with the system chooser (read-only grant through our FileProvider). */
 fun openWithSystem(ctx: android.content.Context, f: java.io.File, mime: String) {
     val uri = androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
+    if (f.name.endsWith(".apk", ignoreCase = true)) {
+        // App update / install: straight to the system installer (it asks once to allow installs from Vesper).
+        val install = android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+            .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (runCatching { ctx.startActivity(install) }.isSuccess) return
+    }
     val view = android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
     runCatching { ctx.startActivity(android.content.Intent.createChooser(view, f.name)) }
 }
