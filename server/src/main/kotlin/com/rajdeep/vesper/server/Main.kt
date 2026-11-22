@@ -354,8 +354,8 @@ private fun Route.devRoutes(s: Services) {
             val k = call.parameters["k"]!!
             val q = call.request.queryParameters
             if (q["op"] != "put" || !store.checkSig(k, "put", q["exp"]?.toLongOrNull() ?: 0, q["sig"].orEmpty())) forbidden()
-            val bytes = call.receiveChannel().readRemaining(com.rajdeep.vesper.shared.Limits.MAX_MEDIA_BYTES + 1).readByteArray()
-            if (bytes.size > com.rajdeep.vesper.shared.Limits.MAX_MEDIA_BYTES) bad("media", "Too large")
+            val bytes = call.receiveChannel().readRemaining(com.rajdeep.vesper.shared.Limits.FILE_PART_MAX + 1).readByteArray()
+            if (bytes.size > com.rajdeep.vesper.shared.Limits.FILE_PART_MAX) bad("media", "Too large")
             store.fileFor(k.replace('_', '/')).writeBytes(bytes)
             call.respond(Ok())
         }

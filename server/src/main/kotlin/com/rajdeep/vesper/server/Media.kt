@@ -182,7 +182,9 @@ class LocalMediaStore(private val cfg: Config) : MediaStore {
 class MediaService(private val db: Db, private val cfg: Config, val store: MediaStore) {
     suspend fun intent(c: Caller, req: MediaIntentRequest): MediaIntentResponse {
         if (req.kind == MessageKind.TEXT) bad("media", "Text has no media")
-        if (req.bytes <= 0 || req.bytes > Limits.MAX_MEDIA_BYTES) bad("media", "File is too large")
+        // Files go up as ≤8 MB encrypted parts; photos/voice stay single small blobs.
+        val cap = if (req.kind == MessageKind.FILE) Limits.FILE_PART_MAX else Limits.MAX_MEDIA_BYTES
+        if (req.bytes <= 0 || req.bytes > cap) bad("media", "File is too large")
         if (!Regex("^[0-9a-f]{64}$").matches(req.sha256)) bad("media", "Bad digest")
         if (req.scope == MediaScope.PRIVATE) {
             val peer = req.peerUserId ?: bad("media", "Missing recipient")
@@ -216,6 +218,15 @@ class MediaService(private val db: Db, private val cfg: Config, val store: Media
         if (m.str("own") != c.uid || m.str("st") != "committed" || m.str("k") != kind.name || m.str("sc") != scope.name) bad("media", "Media not attachable")
         if (scope == MediaScope.PRIVATE && m.str("peer") != peer) bad("media", "Media recipient mismatch")
         return m
+    }
+
+    /** All parts of a file must be attachable; members are capped at 10 MB in total, the admin is not. */
+    suspend fun requireAttachableAll(c: Caller, ids: List<String>, kind: MessageKind, scope: MediaScope, peer: String?) {
+        if (ids.size != ids.toSet().size) bad("media", "Duplicate part")
+        var total = 0L
+        ids.forEach { total += requireAttachable(c, it, kind, scope, peer).long("bytes") ?: 0L }
+        if (kind == MessageKind.FILE && !c.isAdmin && total > Limits.MAX_FILE_TOTAL) bad("media", "Files can be up to 10 MB")
+        if (kind != MessageKind.FILE && ids.size > 1) bad("media", "Only files have parts")
     }
 
     suspend fun attach(id: String, messageId: String, expiresAt: Long) {

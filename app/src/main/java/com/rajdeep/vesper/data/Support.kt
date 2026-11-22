@@ -80,7 +80,7 @@ class Notifier @Inject constructor(
         if (isViewing(peer)) return
         if (settings.isTurnOffInboxNotifications() || settings.isPeerMuted(peer)) return
         if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
-        val preview = when (kind) { MessageKind.TEXT -> text?.take(120) ?: ""; MessageKind.VOICE -> "Voice message"; MessageKind.IMAGE -> "Photo" }
+        val preview = when (kind) { MessageKind.TEXT -> text?.take(120) ?: ""; MessageKind.VOICE -> "Voice message"; MessageKind.IMAGE -> "Photo"; MessageKind.FILE -> "📎 File" }
         val intent = PendingIntent.getActivity(
             ctx, peer.hashCode(),
             Intent(ctx, MainActivity::class.java).putExtra(MainActivity.EXTRA_PEER, peer).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
@@ -108,7 +108,7 @@ class Notifier @Inject constructor(
         if (isViewingHall()) return
         if (settings.isTurnOffHallNotifications()) return
         if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
-        val preview = when (kind) { MessageKind.TEXT -> text?.take(120) ?: ""; MessageKind.VOICE -> "Voice message"; MessageKind.IMAGE -> "Photo" }
+        val preview = when (kind) { MessageKind.TEXT -> text?.take(120) ?: ""; MessageKind.VOICE -> "Voice message"; MessageKind.IMAGE -> "Photo"; MessageKind.FILE -> "📎 File" }
         val intent = PendingIntent.getActivity(
             ctx, 7002,
             Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
@@ -189,14 +189,14 @@ class Expiry @Inject constructor(
         if (session.current() == null) return
         val expired = db.messages().expired(session.now())
         if (expired.isNotEmpty()) {
-            val mediaIds = expired.mapNotNull { m -> m.mediaJson?.let { runCatching { VesperJson.decodeFromString(MediaRef.serializer(), it).mediaId }.getOrNull() } }
-            media.purge(mediaIds.filter { it.isNotEmpty() })
+            val mediaIds = expired.flatMap { m -> m.mediaJson?.let { runCatching { VesperJson.decodeFromString(MediaRef.serializer(), it).blobIds() }.getOrNull() } ?: emptyList() }
+            media.purge(mediaIds)
             expired.forEach { media.purgeStaged(it.stagedBlob) }
             notifier.cancelExpired(expired.mapNotNull { it.serverId })
             db.messages().delete(expired.map { it.localId })
         }
         if (full) {
-            val live = db.messages().allMediaJson().mapNotNull { runCatching { VesperJson.decodeFromString(MediaRef.serializer(), it).mediaId }.getOrNull() }.toSet()
+            val live = db.messages().allMediaJson().flatMap { runCatching { VesperJson.decodeFromString(MediaRef.serializer(), it).blobIds() }.getOrDefault(emptyList()) }.toSet()
             media.purgeOrphans(live)
         }
     }

@@ -64,6 +64,7 @@ class Hall(
                 m == null -> "Missing media"
                 text != null -> "Media messages have no text"
                 kind == MessageKind.VOICE && (m.durationMs ?: 0) > Limits.MAX_VOICE_MS + 1000 -> "Voice message too long"
+                kind == MessageKind.FILE && (m.name.isNullOrBlank() || m.chunks.isEmpty() || m.chunks.first().id != m.mediaId) -> "Bad file"
                 else -> null
             }
         }
@@ -84,8 +85,9 @@ class Hall(
         validate(f.kind, f.body)?.let { return Nack(f.cmid, Nacks.INVALID, it) }
         if (!limiter.allow(c.uid, now)) return Nack(f.cmid, Nacks.RATE, "Slow down a little")
         val mediaId = f.body.media?.mediaId
+        val hallParts = f.body.media?.let { m -> if (f.kind == MessageKind.FILE) m.chunks.map { it.id } else listOf(m.mediaId) } ?: emptyList()
         if (mediaId != null) {
-            runCatching { media.requireAttachable(c, mediaId, f.kind, MediaScope.HALL, null) }.onFailure { return Nack(f.cmid, Nacks.MEDIA, it.message) }
+            runCatching { media.requireAttachableAll(c, hallParts, f.kind, MediaScope.HALL, null) }.onFailure { return Nack(f.cmid, Nacks.MEDIA, it.message) }
         }
         val id = randomId()
         val keep = f.keep && f.kind == MessageKind.TEXT
@@ -98,7 +100,7 @@ class Hall(
                 "at" to now.asDate(), "exp" to exp.asDate(), "ttl" to if (mediaId == null && !keep) exp.asDate() else null,
             ),
         )
-        if (mediaId != null) media.attach(mediaId, id, exp)
+        hallParts.forEach { media.attach(it, id, exp) }
         val username = user.str("u")!!
         hub.toAll(HallMsg(HallMessageDto(id, seq, c.uid, username, f.kind, f.body, now, exp, f.cmid)))
         later {
@@ -190,8 +192,10 @@ class Direct(
         if (missing.isNotEmpty() || extra.isNotEmpty()) return Nack(f.cmid, Nacks.DEVICES, "Device list changed", DeviceMismatch(missing, extra))
         if (f.envelopes.none { it.toUserId == f.toUserId }) return Nack(f.cmid, Nacks.UNKNOWN_USER, "This person has no active devices")
 
+        val directParts = f.mediaId?.let { listOf(it) + f.extraMediaIds } ?: emptyList()
         val mediaDoc = f.mediaId?.let {
-            runCatching { media.requireAttachable(c, it, f.kind, MediaScope.PRIVATE, f.toUserId) }.getOrElse { e -> return Nack(f.cmid, Nacks.MEDIA, e.message) }
+            runCatching { media.requireAttachableAll(c, directParts, f.kind, MediaScope.PRIVATE, f.toUserId) }.getOrElse { e -> return Nack(f.cmid, Nacks.MEDIA, e.message) }
+            media.requireAttachable(c, it, f.kind, MediaScope.PRIVATE, f.toUserId)
         }
         val mid = randomId()
         val exp = now + if (f.keep && f.kind == MessageKind.TEXT) com.rajdeep.vesper.shared.Keep.FOREVER_MS else Limits.ttlFor(f.kind)
@@ -217,7 +221,7 @@ class Direct(
             )
         }
         db.envelopes.insertMany(envDocs)
-        if (f.mediaId != null) media.attach(f.mediaId!!, mid, exp)
+        directParts.forEach { media.attach(it, mid, exp) }
         // Stored durably → deliver live and ack right away; the rest happens off the hot path.
         envDocs.forEach { d -> hub.toDevice(d.str("toUid")!!, d.int("toD")!!, DirectEnv(envToDto(d))) }
         val toName = peer.str("u"); val fromName = me.str("u")

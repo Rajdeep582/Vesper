@@ -431,7 +431,7 @@ private fun HallModeration(vm: ConsoleViewModel) {
                         Column(Modifier.weight(1f)) {
                             Row { Text(m.senderName, style = V.t.label, color = V.c.hall, modifier = Modifier.weight(1f)); Text(clock(m.acceptedAt), style = V.t.mono, color = V.c.text3) }
                             Text(
-                                when (m.kind) { MessageKind.TEXT -> m.body.text ?: ""; MessageKind.VOICE -> "Voice message · " + com.rajdeep.vesper.ui.chat.duration(m.body.media?.durationMs ?: 0); MessageKind.IMAGE -> "Photo" },
+                                when (m.kind) { MessageKind.TEXT -> m.body.text ?: ""; MessageKind.VOICE -> "Voice message · " + com.rajdeep.vesper.ui.chat.duration(m.body.media?.durationMs ?: 0); MessageKind.IMAGE -> "Photo"; MessageKind.FILE -> "File · " + (m.body.media?.name ?: "") },
                                 style = V.t.bodySmall, color = V.c.text, maxLines = 3, overflow = TextOverflow.Ellipsis,
                             )
                         }

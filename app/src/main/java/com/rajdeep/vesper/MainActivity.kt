@@ -163,6 +163,8 @@ class MainActivity : ComponentActivity() {
         val host = object : MediaHost {
             override suspend fun open(ref: MediaRef) = media.open(ref)
             override fun cached(mediaId: String) = media.cached(mediaId)
+            override suspend fun openFile(ref: com.rajdeep.vesper.shared.MediaRef, progress: (Float) -> Unit) = media.openFile(ref, progress)
+            override fun fileIfReady(ref: com.rajdeep.vesper.shared.MediaRef) = media.fileIfReady(ref)
             override val player = voice
         }
         setContent {

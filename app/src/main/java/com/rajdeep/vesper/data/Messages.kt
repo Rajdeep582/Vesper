@@ -224,6 +224,14 @@ class Messages @Inject constructor(
         flush()
     }
 
+    /** Queues a prepared (compressed + encrypted, staged) file; parts upload in the background outbox. */
+    suspend fun sendFile(scope: String, peer: String?, f: com.rajdeep.vesper.media.PreparedFile, reply: ReplyRef? = null) {
+        val first = f.chunks.first()
+        val ref = MediaRef("", f.key.b64(), f.mime, f.cipherBytes, first.sha256, name = f.name, origBytes = f.origBytes, codec = f.codec, chunks = f.chunks)
+        insertOutgoing(scope, peer, MessageKind.FILE, null, ref, f.dir.absolutePath, reply)
+        flush()
+    }
+
     private suspend fun insertOutgoing(scope: String, peer: String?, kind: MessageKind, text: String?, ref: MediaRef?, staged: String?, reply: ReplyRef? = null) {
         val s = me()
         if (scope == Scope.DIRECT && peer != null) rememberContact(peer, session.now())
@@ -247,7 +255,7 @@ class Messages @Inject constructor(
     suspend fun deleteLocal(ids: List<String>) {
         if (ids.isEmpty()) return
         val rows = ids.mapNotNull { dao.get(it) }
-        val mediaIds = rows.mapNotNull { r -> r.mediaJson?.let { runCatching { VesperJson.decodeFromString(MediaRef.serializer(), it).mediaId.ifEmpty { null } }.getOrNull() } }
+        val mediaIds = rows.flatMap { r -> r.mediaJson?.let { runCatching { VesperJson.decodeFromString(MediaRef.serializer(), it).blobIds() }.getOrNull() } ?: emptyList() }
         if (voicePlayer.state.value.id in mediaIds) {
             voicePlayer.stop()
         }
@@ -264,7 +272,7 @@ class Messages @Inject constructor(
     suspend fun deleteForEveryone(ids: List<String>) {
         if (ids.isEmpty()) return
         val rows = ids.mapNotNull { dao.get(it) }
-        val mediaIds = rows.mapNotNull { r -> r.mediaJson?.let { runCatching { VesperJson.decodeFromString(MediaRef.serializer(), it).mediaId.ifEmpty { null } }.getOrNull() } }
+        val mediaIds = rows.flatMap { r -> r.mediaJson?.let { runCatching { VesperJson.decodeFromString(MediaRef.serializer(), it).blobIds() }.getOrNull() } ?: emptyList() }
         if (voicePlayer.state.value.id in mediaIds) {
             voicePlayer.stop()
         }
@@ -314,7 +322,13 @@ class Messages @Inject constructor(
         var ref = m.mediaJson?.let { VesperJson.decodeFromString(MediaRef.serializer(), it) }
         // Notes to self: stays on this phone. No server round trip, no push, nobody else is touched.
         if (m.scope == Scope.DIRECT && m.peerId == me().userId) {
-            if (ref != null && ref.mediaId.isEmpty()) {
+            if (ref != null && kind == MessageKind.FILE && ref.mediaId.isEmpty()) {
+                val dir = m.stagedBlob?.let { java.io.File(it) }
+                if (dir == null || !dir.exists()) { dao.markFailed(m.localId, "File missing"); return true }
+                val chunks = ref.chunks.mapIndexed { i, c -> val id = "self-${m.localId}-$i"; media.adoptPart(java.io.File(dir, "$i.bin"), id); c.copy(id = id) }
+                dir.deleteRecursively()
+                dao.setMedia(m.localId, VesperJson.encodeToString(MediaRef.serializer(), ref.copy(mediaId = chunks.first().id, chunks = chunks)))
+            } else if (ref != null && ref.mediaId.isEmpty()) {
                 val f = m.stagedBlob?.let { java.io.File(it) }
                 if (f == null || !f.exists()) { dao.markFailed(m.localId, "Media missing"); return true }
                 val id = "self-${m.localId}"
@@ -325,6 +339,23 @@ class Messages @Inject constructor(
             val ttl = if (isForever(m.text)) com.rajdeep.vesper.shared.Keep.FOREVER_MS else Limits.ttlFor(kind)
             dao.markSent(m.localId, "self:${m.localId}", now, now + ttl, null, MsgState.READ)
             return true
+        }
+        if (ref != null && kind == MessageKind.FILE && ref.mediaId.isEmpty()) {
+            // Upload part by part; progress is saved after each so a retry resumes instead of starting over.
+            val dir = m.stagedBlob?.let { java.io.File(it) } ?: run { dao.markFailed(m.localId, "File missing"); return true }
+            val sc = if (m.scope == Scope.HALL) MediaScope.HALL else MediaScope.PRIVATE
+            var chunks = ref.chunks
+            for (i in chunks.indices) {
+                if (chunks[i].id.isNotEmpty()) continue
+                val part = java.io.File(dir, "$i.bin")
+                if (!part.exists()) { dao.markFailed(m.localId, "File missing"); return true }
+                val id = media.upload(kind, sc, m.peerId, part, chunks[i].sha256)
+                chunks = chunks.toMutableList().also { it[i] = it[i].copy(id = id) }
+                dao.setMedia(m.localId, VesperJson.encodeToString(MediaRef.serializer(), ref.copy(chunks = chunks)))
+            }
+            ref = ref.copy(mediaId = chunks.first().id, chunks = chunks)
+            dao.setMedia(m.localId, VesperJson.encodeToString(MediaRef.serializer(), ref))
+            dir.deleteRecursively()
         }
         if (ref != null && ref.mediaId.isEmpty()) {
             val staged = m.stagedBlob ?: run { dao.markFailed(m.localId, "Media missing"); return true }
@@ -371,7 +402,7 @@ class Messages @Inject constructor(
             if (envelopes.none { it.toUserId == peer }) {
                 dao.markFailed(m.localId, "This person has no active devices"); return true
             }
-            val reply = rt.request(m.localId, DirectSend(m.localId, peer, kind, body.media?.mediaId, envelopes, keep = isForever(m.text))) ?: return false
+            val reply = rt.request(m.localId, DirectSend(m.localId, peer, kind, body.media?.mediaId, envelopes, keep = isForever(m.text), extraMediaIds = body.media?.chunks?.drop(1)?.map { it.id } ?: emptyList())) ?: return false
             if (reply is Nack && reply.code == Nacks.DEVICES) {
                 deviceCache.remove(peer); deviceCache.remove(s.userId)
                 // Device list changed: drop sessions for removed devices; missing ones get fresh bundles next round.
@@ -482,14 +513,14 @@ class Messages @Inject constructor(
             is com.rajdeep.vesper.shared.PresenceSnapshot -> _online.value = f.online.toSet()
             is HallDeleted -> {
                 val rows = dao.hallByServerIds(f.ids)
-                media.purge(rows.mapNotNull { r -> r.mediaJson?.let { VesperJson.decodeFromString(MediaRef.serializer(), it).mediaId } })
+                media.purge(rows.flatMap { r -> r.mediaJson?.let { runCatching { VesperJson.decodeFromString(MediaRef.serializer(), it).blobIds() }.getOrNull() } ?: emptyList() })
                 dao.deleteHallByServerIds(f.ids)
             }
             is DirectEnv -> if (true.also { dropTyper(f.env.fromUserId, "d") } && receiveEnvelope(f.env, live = true)) rt.send(DirectAck(listOf(f.env.id)))
             is DirectDelivered -> dao.markDelivered(f.mid)
             is com.rajdeep.vesper.shared.DirectDeleted -> {
                 val rows = dao.byServerIds(f.mids).filter { it.scope == Scope.DIRECT }
-                media.purge(rows.mapNotNull { r -> r.mediaJson?.let { VesperJson.decodeFromString(MediaRef.serializer(), it).mediaId } })
+                media.purge(rows.flatMap { r -> r.mediaJson?.let { runCatching { VesperJson.decodeFromString(MediaRef.serializer(), it).blobIds() }.getOrNull() } ?: emptyList() })
                 dao.deleteDirectByServerIds(f.mids)
             }
             is com.rajdeep.vesper.shared.DirectSeen -> dao.markSeen(f.mids)

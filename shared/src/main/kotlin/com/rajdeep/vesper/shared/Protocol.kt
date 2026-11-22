@@ -13,6 +13,13 @@ object Limits {
     const val MAX_TEXT_CHARS = 4000
     const val MAX_BODY_BYTES = 16 * 1024
     const val MAX_MEDIA_BYTES = 2L * 1024 * 1024
+    /** Largest file a member may share (the picked original). The admin has no limit. */
+    const val MAX_FILE_BYTES = 10L * 1024 * 1024
+    /** Files travel as separately encrypted parts of at most this much plaintext (provider cap is 10 MB per blob). */
+    const val FILE_PART_PLAIN = 8L * 1024 * 1024
+    const val FILE_PART_MAX = FILE_PART_PLAIN + 4096
+    /** Server-side ceiling on a member's total file ciphertext: the 10 MB original plus compression/encryption slack. */
+    const val MAX_FILE_TOTAL = MAX_FILE_BYTES + 512 * 1024
     const val MAX_VOICE_MS = 5L * 60 * 1000
     const val USERNAME_MIN = 3
     const val USERNAME_MAX = 20
@@ -54,7 +61,7 @@ val VesperJson = Json {
 }
 
 @Serializable
-enum class MessageKind { @SerialName("text") TEXT, @SerialName("voice") VOICE, @SerialName("image") IMAGE }
+enum class MessageKind { @SerialName("text") TEXT, @SerialName("voice") VOICE, @SerialName("image") IMAGE, @SerialName("file") FILE }
 
 @Serializable
 enum class MediaScope { @SerialName("hall") HALL, @SerialName("private") PRIVATE }
@@ -137,7 +144,16 @@ data class MediaRef(
     val durationMs: Long? = null,
     val waveform: List<Int>? = null,
     val blurhash: String? = null,
+    /** Files only: original name, original size, how the plaintext was packed, and every encrypted part in order. */
+    val name: String? = null,
+    val origBytes: Long? = null,
+    val codec: String? = null,
+    val chunks: List<MediaChunk> = emptyList(),
 )
+
+/** One encrypted part of a file (AES-GCM with the file key, own nonce). [id] is empty until uploaded. */
+@Serializable
+data class MediaChunk(val id: String, val sha256: String, val bytes: Long)
 
 @Serializable
 data class ReplyRef(
@@ -301,7 +317,7 @@ data class ConversationMeta(
 sealed interface Frame
 
 @Serializable @SerialName("hall.send") data class HallSend(val cmid: String, val kind: MessageKind, val body: MessageBody, val keep: Boolean = false) : Frame
-@Serializable @SerialName("direct.send") data class DirectSend(val cmid: String, val toUserId: String, val kind: MessageKind, val mediaId: String? = null, val envelopes: List<OutEnvelope>, val keep: Boolean = false) : Frame
+@Serializable @SerialName("direct.send") data class DirectSend(val cmid: String, val toUserId: String, val kind: MessageKind, val mediaId: String? = null, val envelopes: List<OutEnvelope>, val keep: Boolean = false, val extraMediaIds: List<String> = emptyList()) : Frame
 @Serializable @SerialName("direct.ack") data class DirectAck(val ids: List<String>) : Frame
 /** Client → server: I have seen these messages (message ids) from [peerId]. Relayed to the sender as [DirectSeen]. */
 @Serializable @SerialName("direct.read") data class DirectRead(val peerId: String, val mids: List<String>) : Frame

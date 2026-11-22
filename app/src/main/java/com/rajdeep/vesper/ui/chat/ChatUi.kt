@@ -1,5 +1,9 @@
 package com.rajdeep.vesper.ui.chat
 
+import androidx.compose.material.icons.rounded.AttachFile
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.ui.focus.focusRequester
 import kotlinx.coroutines.withTimeoutOrNull
@@ -145,6 +149,8 @@ import kotlin.math.roundToInt
 interface MediaHost {
     suspend fun open(ref: MediaRef): ByteArray
     fun cached(mediaId: String): ByteArray?
+    suspend fun openFile(ref: MediaRef, progress: (Float) -> Unit = {}): java.io.File
+    fun fileIfReady(ref: MediaRef): java.io.File?
     val player: VoicePlayer
 }
 
@@ -156,7 +162,7 @@ val MessageEntity.replyRef: com.rajdeep.vesper.shared.ReplyRef? get() = replyJso
 fun MessageEntity.toReplyRef(): com.rajdeep.vesper.shared.ReplyRef = com.rajdeep.vesper.shared.ReplyRef(
     messageId = serverId ?: localId,
     senderName = senderName,
-    text = text,
+    text = if (kind == MessageKind.FILE.name) ref?.name else text,
     kind = MessageKind.valueOf(kind),
 )
 
@@ -363,6 +369,10 @@ fun MessageBubble(
                                 m.ref?.let { VoiceContent(m.localId, it, mine, onLongPress = onLongPress) }
                                 Meta(m, fraction, Modifier.align(Alignment.End))
                             }
+                            MessageKind.FILE -> Column(Modifier.padding(start = 8.dp, end = 10.dp, top = if (m.replyRef != null) 3.dp else 8.dp, bottom = 6.dp)) {
+                                m.ref?.let { FileContent(it, mine, uploading = m.state == MsgState.PENDING, onLongPress = onLongPress) }
+                                Meta(m, fraction, Modifier.align(Alignment.End))
+                            }
                         }
                     }
                     // Selection mode: one shield over the whole bubble so text, photo and voice all toggle the same way.
@@ -442,6 +452,7 @@ private fun QuotedReplyCard(reply: com.rajdeep.vesper.shared.ReplyRef, onClick: 
                 MessageKind.TEXT -> reply.text ?: ""
                 MessageKind.VOICE -> "Voice message"
                 MessageKind.IMAGE -> "Photo"
+                MessageKind.FILE -> "📎 " + (reply.text ?: "File")
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (reply.kind == MessageKind.VOICE) {
@@ -476,6 +487,7 @@ fun ReplyPreviewBar(
         MessageKind.TEXT -> reply.text ?: ""
         MessageKind.VOICE -> "Voice message" + (reply.ref?.durationMs?.let { " (${duration(it)})" } ?: "")
         MessageKind.IMAGE -> "Photo"
+        MessageKind.FILE -> "📎 " + (reply.ref?.name ?: "File")
     }
     Row(
         Modifier
@@ -896,7 +908,7 @@ fun Composer(
                                             .padding(start = 4.dp, end = 8.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
-                                        IconAction(Icons.Rounded.Add, "Attach photo", tint = V.c.text2, size = 42.dp, onClick = onAttach)
+                                        IconAction(Icons.Rounded.AttachFile, "Attach", tint = V.c.text2, size = 42.dp, modifier = Modifier.graphicsLayer { rotationZ = 45f }, onClick = onAttach)
                                         LaunchedEffect(focused) { if (focused) emojiOpen = false }
                                         Box(Modifier.weight(1f).padding(vertical = 13.dp)) {
                                             if (text.isEmpty()) Text(placeholder, style = V.t.body, color = V.c.text3)
@@ -1554,3 +1566,108 @@ fun LiveBars(level: Float, color: Color, modifier: Modifier = Modifier) {
 
 /** Per-chat unsent drafts for this app session (RAM only). */
 object Drafts { val map = java.util.concurrent.ConcurrentHashMap<String, String>() }
+
+
+fun humanBytes(b: Long): String = when {
+    b < 1024 -> "$b B"
+    b < 1024 * 1024 -> "%.0f KB".format(b / 1024.0)
+    b < 1024L * 1024 * 1024 -> "%.1f MB".format(b / 1048576.0)
+    else -> "%.2f GB".format(b / 1073741824.0)
+}
+
+private fun fileTint(ext: String): androidx.compose.ui.graphics.Color = when (ext) {
+    "pdf" -> androidx.compose.ui.graphics.Color(0xFFE5675C)
+    "doc", "docx", "odt", "rtf", "txt", "md" -> androidx.compose.ui.graphics.Color(0xFF6C9BE8)
+    "xls", "xlsx", "ods", "csv" -> androidx.compose.ui.graphics.Color(0xFF4FB286)
+    "ppt", "pptx", "odp", "key" -> androidx.compose.ui.graphics.Color(0xFFE59A4F)
+    "zip", "rar", "7z", "gz", "tar", "xz" -> androidx.compose.ui.graphics.Color(0xFFB28BE0)
+    "mp4", "mkv", "mov", "webm", "3gp" -> androidx.compose.ui.graphics.Color(0xFFE06C9F)
+    "mp3", "m4a", "wav", "flac", "ogg", "opus", "aac" -> androidx.compose.ui.graphics.Color(0xFF4FC1C9)
+    "jpg", "jpeg", "png", "webp", "heic", "gif" -> androidx.compose.ui.graphics.Color(0xFFD9B24C)
+    "apk" -> androidx.compose.ui.graphics.Color(0xFF8BC34A)
+    else -> androidx.compose.ui.graphics.Color(0xFF8FA3C8)
+}
+
+/** Opens a ready file with the system chooser (read-only grant through our FileProvider). */
+fun openWithSystem(ctx: android.content.Context, f: java.io.File, mime: String) {
+    val uri = androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
+    val view = android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    runCatching { ctx.startActivity(android.content.Intent.createChooser(view, f.name)) }
+}
+
+fun shareWithSystem(ctx: android.content.Context, f: java.io.File, mime: String) {
+    val uri = androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
+    val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType(mime).putExtra(android.content.Intent.EXTRA_STREAM, uri).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    runCatching { ctx.startActivity(android.content.Intent.createChooser(send, "Share " + f.name)) }
+}
+
+/** WhatsApp-style document card: type badge, name, size · type, and a download/open state ring. */
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+private fun FileContent(ref: MediaRef, mine: Boolean, uploading: Boolean, onLongPress: () -> Unit) {
+    val host = LocalMediaHost.current
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    val fb = V.fb
+    val name = ref.name ?: "File"
+    val ext = name.substringAfterLast('.', "").lowercase().take(4)
+    val tint = fileTint(ext)
+    var ready by remember(ref.mediaId) { mutableStateOf(host.fileIfReady(ref) != null || mine) }
+    var progress by remember(ref.mediaId) { mutableStateOf<Float?>(null) }
+    var failed by remember(ref.mediaId) { mutableStateOf(false) }
+    val shown by animateFloatAsState(progress ?: 0f, tween(Motion.M), label = "dl")
+    fun go() {
+        if (uploading || progress != null || ref.mediaId.isEmpty()) return
+        fb.tick(); failed = false
+        scope.launch {
+            progress = 0f
+            runCatching { host.openFile(ref) { p -> progress = p } }
+                .onSuccess { f -> ready = true; progress = null; openWithSystem(ctx, f, ref.mime) }
+                .onFailure { progress = null; failed = true; fb.error() }
+        }
+    }
+    Row(
+        Modifier.widthIn(min = 250.dp, max = 300.dp).clip(RoundedCornerShape(14.dp)).background(V.c.bg.copy(alpha = 0.35f))
+            .combinedClickable(onClick = { go() }, onLongClick = onLongPress).padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(46.dp).clip(RoundedCornerShape(12.dp)).background(Brush.linearGradient(listOf(tint, tint.copy(alpha = 0.65f)))), contentAlignment = Alignment.Center) {
+            Icon(Icons.Rounded.Description, null, tint = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.95f), modifier = Modifier.size(22.dp).offset(y = (-4).dp))
+            Text(
+                ext.uppercase().ifEmpty { "FILE" }, style = V.t.caption.copy(fontSize = 8.5.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.4.sp),
+                color = androidx.compose.ui.graphics.Color.White, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 4.dp),
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(name, style = V.t.bodySmall.copy(fontWeight = FontWeight.Medium), color = V.c.text, maxLines = 1, softWrap = false, overflow = androidx.compose.ui.text.style.TextOverflow.MiddleEllipsis)
+            Spacer(Modifier.height(3.dp))
+            val sizeLine = buildString {
+                append(humanBytes(ref.origBytes ?: ref.bytes))
+                val sent = ref.bytes
+                val orig = ref.origBytes ?: sent
+                if (orig > 0 && sent < orig * 0.9) append(" → ").append(humanBytes(sent))
+
+            }
+            Text(
+                when {
+                    uploading -> "Sending… · " + sizeLine
+                    failed -> "Couldn't open · tap to retry"
+                    else -> sizeLine
+                },
+                style = V.t.label, color = if (failed) V.c.error else V.c.text2, maxLines = 1, softWrap = false, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+            when {
+                uploading -> androidx.compose.material3.CircularProgressIndicator(Modifier.size(26.dp), color = tint, strokeWidth = 2.5.dp, trackColor = tint.copy(alpha = 0.15f))
+                progress != null -> androidx.compose.material3.CircularProgressIndicator({ shown }, Modifier.size(28.dp), color = tint, strokeWidth = 2.5.dp, trackColor = tint.copy(alpha = 0.15f))
+                ready -> Icon(Icons.AutoMirrored.Rounded.OpenInNew, "Open", tint = tint, modifier = Modifier.size(20.dp))
+                else -> Box(Modifier.size(32.dp).clip(CircleShape).border(1.5.dp, tint.copy(alpha = 0.6f), CircleShape), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Rounded.Download, "Download", tint = tint, modifier = Modifier.size(18.dp))
+                }
+            }
+        }
+    }
+}

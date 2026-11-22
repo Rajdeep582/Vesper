@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <cache-path name="capture" path="capture/" />
+    <!-- Shared files after download + unpack; exposed read-only only to the app the user picks. -->
+    <files-path name="shared" path="files/" />
 </paths>

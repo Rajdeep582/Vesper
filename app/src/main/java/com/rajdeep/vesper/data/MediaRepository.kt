@@ -122,18 +122,65 @@ class MediaRepository @Inject constructor(
 
     fun cached(mediaId: String): ByteArray? = plainCache.get(mediaId)
 
-    fun purge(mediaIds: Collection<String>) {
-        mediaIds.forEach { id -> plainCache.remove(id); File(dir, "$id.bin").delete() }
+    private val decoded get() = File(ctx.filesDir, "files").apply { mkdirs() }
+
+    /** Where a shared file lives once opened (null until downloaded & unpacked). */
+    fun fileIfReady(ref: MediaRef): File? = File(decoded, ref.mediaId + "/" + (ref.name ?: "file")).takeIf { ref.mediaId.isNotEmpty() && it.exists() }
+
+    /**
+     * Fetches every encrypted part (cached ciphertext first), checks each digest, decrypts in order and unpacks.
+     * Plaintext only ever touches app-private storage; [progress] reports 0..1.
+     */
+    suspend fun openFile(ref: MediaRef, progress: (Float) -> Unit = {}): File = withContext(Dispatchers.IO) {
+        fileIfReady(ref)?.let { return@withContext it }
+        val lock = locks.getOrPut(ref.mediaId) { Mutex() }
+        lock.withLock {
+            fileIfReady(ref)?.let { return@withLock it }
+            val parts = ref.chunks.ifEmpty { listOf(com.rajdeep.vesper.shared.MediaChunk(ref.mediaId, ref.sha256, ref.bytes)) }
+            val key = ref.key.unb64()
+            val packed = File(decoded, ref.mediaId + ".part")
+            packed.delete()
+            java.io.FileOutputStream(packed).use { out ->
+                parts.forEachIndexed { i, p ->
+                    val f = File(dir, p.id + ".bin")
+                    val blob = if (f.exists()) f.readBytes() else {
+                        val url = api.get("/v1/media/${p.id}/url", MediaUrl.serializer())
+                        val (code, data) = api.external(Request.Builder().url(url.url).build())
+                        if (code !in 200..299) throw ApiException(code, "download", "File unavailable")
+                        if (MediaCipher.sha256Hex(data) != p.sha256) throw ApiException(0, "integrity", "File failed its integrity check")
+                        f.writeBytes(data)
+                        data
+                    }
+                    out.write(MediaCipher.decrypt(key, blob))
+                    progress((i + 1f) / parts.size)
+                }
+            }
+            val out = File(decoded, ref.mediaId + "/" + (ref.name ?: "file"))
+            com.rajdeep.vesper.media.FilePrep.unpack(packed, ref.codec, out)
+            out
+        }
     }
 
-    fun purgeStaged(path: String?) { path?.let { File(it).delete() } }
+    /** Notes-to-self / sender side: keep each staged part locally under its id. */
+    suspend fun adoptPart(staged: File, id: String) = adoptLocal(staged, id)
+
+    fun purge(mediaIds: Collection<String>) {
+        mediaIds.forEach { id -> plainCache.remove(id); File(dir, "$id.bin").delete(); File(decoded, id).deleteRecursively() }
+    }
+
+    fun purgeStaged(path: String?) { path?.let { File(it).deleteRecursively() } }
 
     /** Removes cached blobs not referenced by any live message (safety net after crashes). */
     fun purgeOrphans(liveIds: Set<String>) {
         dir.listFiles()?.forEach { if (it.nameWithoutExtension !in liveIds) it.delete() }
+        decoded.listFiles()?.forEach { if (it.nameWithoutExtension !in liveIds) it.deleteRecursively() }
         File(ctx.cacheDir, "rec").listFiles()?.forEach { if (System.currentTimeMillis() - it.lastModified() > 10 * 60_000) it.delete() }
         File(ctx.cacheDir, "capture").listFiles()?.forEach { if (System.currentTimeMillis() - it.lastModified() > 10 * 60_000) it.delete() }
     }
 
     fun keyB64(key: ByteArray) = key.b64()
 }
+
+
+/** Every stored blob id behind a media ref (all file parts, or the single blob). */
+fun MediaRef.blobIds(): List<String> = (chunks.map { it.id } + mediaId).filter { it.isNotEmpty() }.distinct()

@@ -256,7 +256,7 @@ private fun ConversationItem(r: ConversationRow, online: Boolean = false, typing
                     Spacer(Modifier.width(4.dp))
                 }
                 Text(
-                    when (kind) { MessageKind.TEXT -> r.lastText ?: ""; MessageKind.VOICE -> "Voice message"; MessageKind.IMAGE -> "Photo" },
+                    when (kind) { MessageKind.TEXT -> r.lastText ?: ""; MessageKind.VOICE -> "Voice message"; MessageKind.IMAGE -> "Photo"; MessageKind.FILE -> "📎 File" },
                     style = V.t.bodySmall, color = if (r.unread > 0) V.c.text else V.c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
                 )
                 Reveal(r.unread > 0, enter = scaleIn(Motion.bouncy()) + fadeIn(), exit = fadeOut()) {

@@ -1,5 +1,9 @@
 package com.rajdeep.vesper.ui.chat
 
+import androidx.compose.material.icons.rounded.Movie
+import androidx.compose.material.icons.rounded.PhotoCamera
+import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
@@ -216,6 +220,7 @@ class ChatViewModel @Inject constructor(
                 MessageKind.TEXT -> m.text ?: ""
                 MessageKind.VOICE -> "[Voice message" + (m.ref?.durationMs?.let { " " + (it / 1000).let { s -> "%d:%02d".format(s / 60, s % 60) } } ?: "") + "]"
                 MessageKind.IMAGE -> "[Photo]"
+                MessageKind.FILE -> "[File: " + (m.ref?.name ?: "file") + "]"
             }
             appendLine("[" + df.format(java.util.Date(m.acceptedAt ?: m.createdAt)) + "] " + who + ": " + body)
         }
@@ -275,6 +280,21 @@ class ChatViewModel @Inject constructor(
             messages.sendMedia(scope, peer, MessageKind.IMAGE, img.bytes, img.mime, img.width, img.height, null, null, img.blurhash, rep)
         }.onFailure { error.value = "Couldn't prepare that photo" }
         deleteAfter?.delete()
+    }
+
+    /** Compress → encrypt in parts → queue. Members: 10 MB per file; the admin: no limit. */
+    fun sendFile(ctx: Context, uri: Uri, reply: com.rajdeep.vesper.shared.ReplyRef? = null) = viewModelScope.launch {
+        val rep = reply ?: replyTo.value?.toReplyRef()
+        replyTo.value = null
+        error.value = "Compressing & encrypting…"
+        runCatching {
+            val f = com.rajdeep.vesper.media.FilePrep.prepare(ctx, uri, isAdmin)
+            messages.sendFile(scope, peer, f, rep)
+            val saved = (if (f.origBytes > 0) 100 - (f.cipherBytes * 100 / f.origBytes) else 0).coerceIn(0, 99)
+            error.value = if (saved >= 5) "Sending · $saved% smaller" else "Sending…"
+        }.onFailure { e ->
+            error.value = if (e is com.rajdeep.vesper.media.FileTooLarge) "Files can be up to 10 MB" else "Couldn't prepare that file"
+        }
     }
 
     fun startRecording(): Boolean = recorder.start(Limits.MAX_VOICE_MS)
@@ -415,6 +435,19 @@ fun ChatScreen(
     val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let { vm.sendImage(ctx, it) }
     }
+    var saveRef by remember { mutableStateOf<com.rajdeep.vesper.shared.MediaRef?>(null) }
+    val hostForSave = LocalMediaHost.current
+    val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
+        val r = saveRef; saveRef = null
+        if (uri != null && r != null) scope.launch {
+            val ok = runCatching {
+                val f = hostForSave.openFile(r)
+                kotlinx.coroutines.withContext(Dispatchers.IO) { ctx.contentResolver.openOutputStream(uri)!!.use { o -> f.inputStream().use { it.copyTo(o) } } }
+            }.isSuccess
+            vm.error.value = if (ok) "Saved" else "Couldn't save file"
+        }
+    }
+    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { vm.sendFile(ctx, it) } }
     var captureFile by remember { mutableStateOf<File?>(null) }
     val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
         val f = captureFile
@@ -692,18 +725,26 @@ fun ChatScreen(
 
     if (attachOpen) {
         ModalBottomSheet(onDismissRequest = { attachOpen = false }, containerColor = V.c.s1, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-            SheetTitle("Share a photo", "Photos are compressed, stripped of location data and encrypted before upload. They disappear after 24 hours.")
-            SheetAction("Choose from library") {
-                attachOpen = false
-                pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            SheetTitle("Share", if (vm.isAdmin) "Compressed and end-to-end encrypted on this phone before upload · no size limit for you" else "Compressed and end-to-end encrypted on this phone before upload · files up to 10 MB")
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceEvenly) {
+                AttachTile(Icons.Rounded.Description, "Document", androidx.compose.ui.graphics.Color(0xFF7F66FF)) {
+                    attachOpen = false; pickFile.launch(arrayOf("*/*"))
+                }
+                AttachTile(Icons.Rounded.PhotoLibrary, "Gallery", androidx.compose.ui.graphics.Color(0xFFC861F9)) {
+                    attachOpen = false; pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }
+                AttachTile(Icons.Rounded.PhotoCamera, "Camera", androidx.compose.ui.graphics.Color(0xFFFF2E74)) {
+                    attachOpen = false
+                    val dir = File(ctx.cacheDir, "capture").apply { mkdirs() }
+                    val f = File(dir, UUID.randomUUID().toString() + ".jpg")
+                    captureFile = f
+                    takePhoto.launch(FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f))
+                }
+                AttachTile(Icons.Rounded.Movie, "Video", androidx.compose.ui.graphics.Color(0xFF02A698)) {
+                    attachOpen = false; pickFile.launch(arrayOf("video/*"))
+                }
             }
-            SheetAction("Take a photo") {
-                attachOpen = false
-                val dir = File(ctx.cacheDir, "capture").apply { mkdirs() }
-                val f = File(dir, UUID.randomUUID().toString() + ".jpg")
-                captureFile = f
-                takePhoto.launch(FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f))
-            }
+            Text("Photos and videos are shrunk like WhatsApp; documents are packed with XZ. Shared files disappear after 24 hours.", style = V.t.label, color = V.c.text3, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -773,6 +814,17 @@ fun ChatScreen(
                     m.expiresAt?.let { append("\nDisappears " + clockFull(it)) }
                 },
             )
+            if (kind == MessageKind.FILE && m.ref != null) {
+                val host = LocalMediaHost.current
+                val fileRef = m.ref!!
+                SheetAction("Share file") {
+                    menuFor = null
+                    scope.launch { runCatching { host.openFile(fileRef) }.onSuccess { shareWithSystem(ctx, it, fileRef.mime) }.onFailure { vm.error.value = "Couldn't open file" } }
+                }
+                SheetAction("Save to device") {
+                    menuFor = null; saveRef = fileRef; saver.launch(fileRef.name ?: "file")
+                }
+            }
             if (kind == MessageKind.TEXT && m.text != null) SheetAction("Copy text") {
                 scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", m.text))) }; menuFor = null
             }
@@ -1164,5 +1216,18 @@ private fun ChatSearchBar(q: String, onQ: (String) -> Unit, count: Int, idx: Int
         }
         IconAction(Icons.Rounded.KeyboardArrowUp, "Previous match", tint = if (count > 0) V.c.text else V.c.text3, onClick = onPrev)
         IconAction(Icons.Rounded.KeyboardArrowDown, "Next match", tint = if (count > 0) V.c.text else V.c.text3, onClick = onNext)
+    }
+}
+
+
+@Composable
+private fun AttachTile(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, color: androidx.compose.ui.graphics.Color, onClick: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clip(RoundedCornerShape(16.dp)).pressable(scaleTo = 0.9f, onClick = onClick).padding(6.dp)) {
+        Box(
+            Modifier.size(58.dp).clip(CircleShape).background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(color, color.copy(alpha = 0.7f)))),
+            contentAlignment = Alignment.Center,
+        ) { Icon(icon, null, tint = androidx.compose.ui.graphics.Color.White, modifier = Modifier.size(26.dp)) }
+        Spacer(Modifier.height(8.dp))
+        Text(label, style = V.t.label, color = V.c.text2)
     }
 }
