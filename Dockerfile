@@ -6,7 +6,11 @@ COPY gradle gradle
 COPY server-build server-build
 COPY shared shared
 COPY server server
-RUN sed -i "s/\r$//" gradlew && chmod +x gradlew && ./gradlew --no-daemon -q -p server-build :server:installDist -x test
+# Dependencies come from Google's Maven Central mirror (see server-build/settings.gradle.kts). One retry covers a
+# transient network error without masking a real build failure.
+RUN sed -i "s/\r$//" gradlew && chmod +x gradlew && \
+    (./gradlew --no-daemon -q -p server-build :server:installDist -x test || \
+     (sleep 15 && ./gradlew --no-daemon -q -p server-build :server:installDist -x test))
 
 FROM eclipse-temurin:21-jre
 WORKDIR /app

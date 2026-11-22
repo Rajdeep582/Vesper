@@ -1,17 +1,17 @@
 // Standalone build for the backend only (no Android SDK needed): ./gradlew -p server-build :server:installDist
-// Maven Central rate-limits shared build IPs (HTTP 429 on Render's builders), so resolve through the Gradle
-// Plugin Portal and Google's Maven Central mirror first and keep Central itself as the last fallback.
+//
+// Everything resolves from Google's mirror of Maven Central. Maven Central itself answers HTTP 429 to shared build
+// machines (Render), and the Gradle Plugin Portal redirects to Central, so neither may be on the path: a 429 from
+// any listed repository fails the whole build instead of falling through to the next one.
 pluginManagement {
     repositories {
-        gradlePluginPortal()
         maven("https://maven-central.storage-download.googleapis.com/maven2/")
-        mavenCentral()
     }
 }
 dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         maven("https://maven-central.storage-download.googleapis.com/maven2/")
-        mavenCentral()
         maven("https://build-artifacts.signal.org/libraries/maven/") { content { includeGroup("org.signal") } }
     }
     versionCatalogs { create("libs") { from(files("../gradle/libs.versions.toml")) } }
