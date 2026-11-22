@@ -216,7 +216,7 @@ class ChatViewModel @Inject constructor(
         rows.forEach { m ->
             if (m.state == MsgState.SYSTEM) return@forEach
             val who = if (m.outgoing) "You" else m.senderName
-            val body = when (MessageKind.valueOf(m.kind)) {
+            val body = when (MessageKind.of(m.kind)) {
                 MessageKind.TEXT -> m.text ?: ""
                 MessageKind.VOICE -> "[Voice message" + (m.ref?.durationMs?.let { " " + (it / 1000).let { s -> "%d:%02d".format(s / 60, s % 60) } } ?: "") + "]"
                 MessageKind.IMAGE -> "[Photo]"
@@ -826,7 +826,7 @@ fun ChatScreen(
     menuFor?.let { m ->
         val clipboard = LocalClipboard.current
         ModalBottomSheet(onDismissRequest = { menuFor = null }, containerColor = V.c.s1) {
-            val kind = MessageKind.valueOf(m.kind)
+            val kind = MessageKind.of(m.kind)
             SheetTitle(
                 if (m.outgoing) "Your message" else m.senderName,
                 buildString {
@@ -1241,19 +1241,19 @@ private fun ChatSearchBar(q: String, onQ: (String) -> Unit, count: Int, idx: Int
 
 
 @Composable
-private fun AttachTile(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, color: androidx.compose.ui.graphics.Color, index: Int, onClick: () -> Unit) {
+private fun androidx.compose.foundation.layout.RowScope.AttachTile(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, color: androidx.compose.ui.graphics.Color, index: Int, onClick: () -> Unit) {
     val pop = remember { androidx.compose.animation.core.Animatable(0f) }
     LaunchedEffect(Unit) { kotlinx.coroutines.delay(40L * index); pop.animateTo(1f, androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 420f)) }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.graphicsLayer { scaleX = 0.5f + 0.5f * pop.value; scaleY = scaleX; alpha = pop.value.coerceIn(0f, 1f); translationY = (1f - pop.value) * 18.dp.toPx() }
+        modifier = Modifier.weight(1f).graphicsLayer { scaleX = 0.5f + 0.5f * pop.value; scaleY = scaleX; alpha = pop.value.coerceIn(0f, 1f); translationY = (1f - pop.value) * 18.dp.toPx() }
             .clip(RoundedCornerShape(16.dp)).pressable(scaleTo = 0.9f, onClick = onClick).padding(6.dp),
     ) {
         Box(
-            Modifier.size(58.dp).clip(CircleShape).background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(color, color.copy(alpha = 0.7f)))),
+            Modifier.size(54.dp).clip(CircleShape).background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(color, color.copy(alpha = 0.7f)))),
             contentAlignment = Alignment.Center,
         ) { Icon(icon, null, tint = androidx.compose.ui.graphics.Color.White, modifier = Modifier.size(26.dp)) }
         Spacer(Modifier.height(8.dp))
-        Text(label, style = V.t.label, color = V.c.text2)
+        Text(label, style = V.t.label, color = V.c.text2, maxLines = 1, softWrap = false)
     }
 }

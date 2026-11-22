@@ -163,7 +163,7 @@ fun MessageEntity.toReplyRef(): com.rajdeep.vesper.shared.ReplyRef = com.rajdeep
     messageId = serverId ?: localId,
     senderName = senderName,
     text = if (kind == MessageKind.FILE.name) ref?.name else text,
-    kind = MessageKind.valueOf(kind),
+    kind = MessageKind.of(kind),
 )
 
 private val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
@@ -198,7 +198,7 @@ fun MessageBubble(
 ) {
     if (m.state == MsgState.SYSTEM) { SystemLine(m.text ?: ""); return }
     val mine = m.outgoing
-    val kind = MessageKind.valueOf(m.kind)
+    val kind = MessageKind.of(m.kind)
     val ttl = Limits.ttlFor(kind)
     val remaining = m.expiresAt?.let { it - now }
     val fraction = remaining?.let { it.toFloat() / ttl } ?: 1f
@@ -482,7 +482,7 @@ fun ReplyPreviewBar(
     val accent = V.accent
     val mine = reply.outgoing
     val name = if (mine) "You" else reply.senderName
-    val kind = MessageKind.valueOf(reply.kind)
+    val kind = MessageKind.of(reply.kind)
     val textSnippet = when (kind) {
         MessageKind.TEXT -> reply.text ?: ""
         MessageKind.VOICE -> "Voice message" + (reply.ref?.durationMs?.let { " (${duration(it)})" } ?: "")

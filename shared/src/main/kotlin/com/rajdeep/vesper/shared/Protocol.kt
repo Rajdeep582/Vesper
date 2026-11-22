@@ -61,7 +61,14 @@ val VesperJson = Json {
 }
 
 @Serializable
-enum class MessageKind { @SerialName("text") TEXT, @SerialName("voice") VOICE, @SerialName("image") IMAGE, @SerialName("file") FILE }
+enum class MessageKind {
+    @SerialName("text") TEXT, @SerialName("voice") VOICE, @SerialName("image") IMAGE, @SerialName("file") FILE;
+
+    companion object {
+        /** Never throws: a kind written by a newer/older build degrades to TEXT instead of crashing the app. */
+        fun of(name: String?): MessageKind = entries.firstOrNull { it.name == name } ?: TEXT
+    }
+}
 
 @Serializable
 enum class MediaScope { @SerialName("hall") HALL, @SerialName("private") PRIVATE }

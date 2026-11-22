@@ -24,7 +24,7 @@ class ActivityLog(private val db: Db, private val hub: Hub) {
         fun toDto(d: Document) = ActivityEvent(
             id = d.str("_id")!!, type = d.str("t")!!, at = d.millis("at")!!,
             userId = d.str("uid"), username = d.str("un"), peerId = d.str("peer"), peerName = d.str("pn"),
-            kind = d.str("k")?.let { MessageKind.valueOf(it) },
+            kind = d.str("k")?.let { MessageKind.of(it) },
         )
     }
 }

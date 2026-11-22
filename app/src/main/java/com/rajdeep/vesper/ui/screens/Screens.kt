@@ -1,5 +1,6 @@
 package com.rajdeep.vesper.ui.screens
 
+import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.Insights
 import com.rajdeep.vesper.ui.components.springOverscroll
 import com.rajdeep.vesper.ui.components.Reveal
@@ -250,13 +251,13 @@ private fun ConversationItem(r: ConversationRow, online: Boolean = false, typing
                     )
                     Spacer(Modifier.width(4.dp))
                 }
-                val kind = MessageKind.valueOf(r.lastKind)
+                val kind = MessageKind.of(r.lastKind)
                 if (kind != MessageKind.TEXT) {
-                    Icon(if (kind == MessageKind.VOICE) Icons.Rounded.GraphicEq else Icons.Rounded.Image, null, tint = V.c.text2, modifier = Modifier.size(14.dp))
+                    Icon(when (kind) { MessageKind.VOICE -> Icons.Rounded.GraphicEq; MessageKind.FILE -> Icons.Rounded.AttachFile; else -> Icons.Rounded.Image }, null, tint = V.c.text2, modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(4.dp))
                 }
                 Text(
-                    when (kind) { MessageKind.TEXT -> r.lastText ?: ""; MessageKind.VOICE -> "Voice message"; MessageKind.IMAGE -> "Photo"; MessageKind.FILE -> "📎 File" },
+                    when (kind) { MessageKind.TEXT -> r.lastText ?: ""; MessageKind.VOICE -> "Voice message"; MessageKind.IMAGE -> "Photo"; MessageKind.FILE -> "File" },
                     style = V.t.bodySmall, color = if (r.unread > 0) V.c.text else V.c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
                 )
                 Reveal(r.unread > 0, enter = scaleIn(Motion.bouncy()) + fadeIn(), exit = fadeOut()) {

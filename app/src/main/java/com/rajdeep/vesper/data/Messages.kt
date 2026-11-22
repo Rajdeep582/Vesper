@@ -318,7 +318,7 @@ class Messages @Inject constructor(
 
     /** Returns true when the message left the pending state (sent or permanently failed). */
     private suspend fun sendOne(m: MessageEntity): Boolean {
-        val kind = MessageKind.valueOf(m.kind)
+        val kind = MessageKind.of(m.kind)
         var ref = m.mediaJson?.let { VesperJson.decodeFromString(MediaRef.serializer(), it) }
         // Notes to self: stays on this phone. No server round trip, no push, nobody else is touched.
         if (m.scope == Scope.DIRECT && m.peerId == me().userId) {

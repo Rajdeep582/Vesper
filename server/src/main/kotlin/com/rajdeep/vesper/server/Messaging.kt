@@ -128,7 +128,7 @@ class Hall(
         val body = VesperJson.decodeFromString(MessageBody.serializer(), atRest.open(d.str("enc")!!, id))
         return HallMessageDto(
             id, d.long("seq")!!, d.str("uid")!!, nameMap[d.str("uid")] ?: "former member",
-            MessageKind.valueOf(d.str("k")!!), body, d.millis("at")!!, d.millis("exp")!!, d.str("cmid"),
+            MessageKind.of(d.str("k")!!), body, d.millis("at")!!, d.millis("exp")!!, d.str("cmid"),
         )
     }
 
@@ -240,7 +240,7 @@ class Direct(
 
     private fun envToDto(d: Document) = DirectEnvelopeDto(
         id = d.str("_id")!!, mid = d.str("mid")!!, fromUserId = d.str("fromUid")!!, fromDeviceId = d.int("fromD")!!,
-        toUserId = d.str("toUid")!!, type = d.int("type")!!, body = d.str("body")!!, kind = MessageKind.valueOf(d.str("k")!!),
+        toUserId = d.str("toUid")!!, type = d.int("type")!!, body = d.str("body")!!, kind = MessageKind.of(d.str("k")!!),
         acceptedAt = d.millis("at")!!, expiresAt = d.millis("exp")!!,
     )
 
