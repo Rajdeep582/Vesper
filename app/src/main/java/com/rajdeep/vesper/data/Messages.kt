@@ -238,7 +238,26 @@ class Messages @Inject constructor(
     suspend fun markRead(peer: String) {
         val sids = dao.unreadServerIds(peer)
         dao.markRead(peer)
-        if (sids.isNotEmpty()) runCatching { rt.send(com.rajdeep.vesper.shared.DirectRead(peer, sids)) }
+        if (sids.isEmpty() || peer == session.current()?.userId) return
+        // Socket first; REST when the socket isn't up (e.g. opened from a notification); otherwise queue for the next
+        // connection so the sender's blue ticks are never lost.
+        if (rt.send(com.rajdeep.vesper.shared.DirectRead(peer, sids))) return
+        val ok = runCatching {
+            api.post("/v1/direct/read", com.rajdeep.vesper.shared.DirectRead(peer, sids), com.rajdeep.vesper.shared.DirectRead.serializer(), Ok.serializer())
+        }.isSuccess
+        if (!ok) {
+            val prev = db.kv().get("rr:$peer")?.split(',')?.filter { it.isNotBlank() }.orEmpty()
+            db.kv().put(com.rajdeep.vesper.core.db.KvEntity("rr:$peer", (prev + sids).distinct().takeLast(500).joinToString(",")))
+        }
+    }
+
+    /** Read receipts that couldn't be delivered earlier. */
+    private suspend fun flushReads() {
+        db.kv().pendingReads().forEach { e ->
+            val peer = e.key.removePrefix("rr:")
+            val ids = e.value.split(',').filter { it.isNotBlank() }
+            if (ids.isEmpty() || rt.send(com.rajdeep.vesper.shared.DirectRead(peer, ids))) db.kv().remove(e.key)
+        }
     }
 
     private fun me() = session.current() ?: error("signed out")
@@ -249,14 +268,21 @@ class Messages @Inject constructor(
     // ------------------------------------------------------------------ sending
 
     suspend fun sendText(scope: String, peer: String?, text: String, reply: ReplyRef? = null) {
+        queueText(scope, peer, text, reply)
+        flush()
+    }
+
+    /** Writes a text message to the outbox without sending (used by notification replies; OutboxWorker delivers). */
+    suspend fun queueText(scope: String, peer: String?, text: String, reply: ReplyRef? = null) {
         val t = text.trim()
         if (t.isEmpty()) return
         val chunks = if (isForever(t)) listOf(t) else t.chunked(Limits.MAX_TEXT_CHARS)
         chunks.forEachIndexed { i, part ->
             insertOutgoing(scope, peer, MessageKind.TEXT, part, null, null, if (i == 0) reply else null)
         }
-        flush()
     }
+
+    suspend fun hasPending(): Boolean = dao.pending().isNotEmpty() || db.kv().pendingReads().isNotEmpty()
 
     suspend fun sendMedia(scope: String, peer: String?, kind: MessageKind, plain: ByteArray, mime: String, width: Int?, height: Int?, durationMs: Long?, waveform: List<Int>?, blurhash: String?, reply: ReplyRef? = null) {
         val staged = media.stage(plain)
@@ -302,7 +328,7 @@ class Messages @Inject constructor(
         }
         dao.delete(ids)
         runCatching {
-            rows.filter { it.scope == Scope.HALL }.mapNotNull { it.serverId }.forEach { db.kv().put(com.rajdeep.vesper.core.db.KvEntity("hid:$it", "1")) }
+            rows.filter { it.scope == Scope.HALL && it.serverId != null }.forEach { db.kv().put(com.rajdeep.vesper.core.db.KvEntity("hid:${it.serverId}", ((it.expiresAt ?: (session.now() + Limits.TEXT_TTL_MS)) + 60_000).toString())) }
             rows.forEach { media.purgeStaged(it.stagedBlob) }
             media.purge(mediaIds)
             backup.forget(rows.filter { it.scope == Scope.DIRECT }.mapNotNull { it.serverId })
@@ -502,6 +528,7 @@ class Messages @Inject constructor(
             launch { runCatching { syncDirect() }; runCatching { syncReceipts() } }
             launch { runCatching { syncContacts() } }
             launch { runCatching { syncPins() } }
+            launch { runCatching { flushReads() } }
             launch { runCatching { onlineCount() } }
         }
         runCatching { maintainPreKeys() }

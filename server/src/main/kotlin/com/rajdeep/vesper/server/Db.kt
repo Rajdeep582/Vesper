@@ -69,6 +69,13 @@ class Db(val client: MongoClient, val db: MongoDatabase) {
         safe("27") { backups.createIndex(Indexes.ascending("uid", "at")) }
         safe("28") { backups.createIndex(Indexes.ascending("exp"), IndexOptions().expireAfter(0, TimeUnit.SECONDS)) }
         safe("26") { devices.createIndex(Indexes.ascending("hw"), IndexOptions().sparse(true)) }
+        // Lookups that used to scan: recipient side of private messages, pins, the contacts list, blobs by message.
+        safe("29") { privateMeta.createIndex(Indexes.ascending("toUid")) }
+        safe("30") { privateMeta.createIndex(Indexes.ascending("pin"), IndexOptions().sparse(true)) }
+        safe("31") { hall.createIndex(Indexes.ascending("pin"), IndexOptions().sparse(true)) }
+        safe("32") { conversations.createIndex(Indexes.ascending("a")) }
+        safe("33") { conversations.createIndex(Indexes.ascending("b")) }
+        safe("34") { media.createIndex(Indexes.ascending("msg")) }
     }
 
     suspend fun nextSeq(name: String): Long {

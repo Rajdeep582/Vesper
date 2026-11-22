@@ -72,7 +72,7 @@ fun AboutContent() {
         Hero("Vesper", "A private evening room for a close circle — conversations that are present for a while, then fade.")
         Spacer(Modifier.height(10.dp))
         Feature(Icons.Rounded.Forum, "The Hall", "One shared space for everyone on Vesper. Text, photos and voice notes arrive live, with read-at-a-glance ticks.")
-        Feature(Icons.Rounded.Lock, "End-to-end encrypted Direct", "Private chats use the Signal protocol (post-quantum PQXDH, per-device sessions). Messages are locked on your phone and unlocked only on theirs — the server relays ciphertext it cannot read.")
+        Feature(Icons.Rounded.Lock, "End-to-end encrypted Inbox", "Private chats use the Signal protocol (post-quantum PQXDH, per-device sessions). Messages are locked on your phone and unlocked only on theirs — the server relays ciphertext it cannot read.")
         Feature(Icons.Rounded.Shield, "Private by design", "Username and password only — no phone number, no email, no contacts. The administrator sees who talks to whom and when, never what is said. Safety numbers let you verify a chat in person.")
         Feature(Icons.Rounded.Schedule, "Messages that fade", "Text disappears 72 hours after the server accepts it; photos and voice after 24. They're hard-deleted from the server, storage and every phone.")
         Feature(Icons.Rounded.AllInclusive, "Keep what matters", "End a bold message with forever — *like this*forever — or use /keep to make it permanent.")

@@ -105,11 +105,18 @@ class Hall(
         hub.toAll(HallMsg(HallMessageDto(id, seq, c.uid, username, f.kind, f.body, now, exp, f.cmid)))
         later {
             activity.record("hall", c.uid, username, kind = f.kind)
-            val offlineUsers = db.users.find(Filters.and(Filters.ne("_id", c.uid), Filters.eq("st", "active")))
-                .toList()
-                .mapNotNull { it.str("_id") }
-                .filter { !hub.isOnline(it) }
-            if (offlineUsers.isNotEmpty()) push.wakeHall(offlineUsers)
+            val members = db.users.find(Filters.and(Filters.ne("_id", c.uid), Filters.eq("st", "active")))
+                .projection(Document("u", 1)).toList()
+            val offline = members.filter { !hub.isOnline(it.str("_id")!!) }
+            if (offline.isNotEmpty()) {
+                // @username / @all / a reply to someone: wake them immediately (no cooldown).
+                val called = HallMentions.names(f.body.text)
+                val everyone = called.any { it in HallMentions.EVERYONE }
+                val repliedTo = f.body.reply?.senderName?.lowercase()
+                val urgent = offline.filter { d -> val u = d.str("u")?.lowercase(); everyone || u in called || (u != null && u == repliedTo) }
+                    .mapNotNull { it.str("_id") }.toSet()
+                push.wakeHall(offline.mapNotNull { it.str("_id") }, urgent)
+            }
         }
         return Ack(f.cmid, id, now, exp, seq)
     }
@@ -226,7 +233,7 @@ class Direct(
         envDocs.forEach { d -> hub.toDevice(d.str("toUid")!!, d.int("toD")!!, DirectEnv(envToDto(d))) }
         val toName = peer.str("u"); val fromName = me.str("u")
         later {
-            push.wake(f.toUserId)
+            push.wake(f.toUserId, hub.onlineDevices(f.toUserId))
             val (a, b) = pair.split(":")
             db.conversations.updateOne(
                 Document("_id", pair),

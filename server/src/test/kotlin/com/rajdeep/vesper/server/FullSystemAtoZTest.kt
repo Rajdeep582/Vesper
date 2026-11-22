@@ -320,8 +320,12 @@ class FullSystemAtoZTest {
         val clientWs = createClient { install(WebSockets) }
         clientWs.webSocket("/v1/ws", request = { header("Authorization", "Bearer ${aliceAuth.accessToken}") }) {
             send(WsFrame.Text(VesperJson.encodeToString(Frame.serializer(), DirectSend(cmid, bobAuth.user.id, MessageKind.TEXT, null, listOf(outEnvelope)))))
-            val ackFrame = incoming.receive() as WsFrame.Text
-            val ack = VesperJson.decodeFromString(Frame.serializer(), ackFrame.readText()) as Ack
+            // The server greets with presence frames first; wait for our ack.
+            var ack: Ack? = null
+            while (ack == null) {
+                val f = VesperJson.decodeFromString(Frame.serializer(), (incoming.receive() as WsFrame.Text).readText())
+                if (f is Ack) ack = f
+            }
             assertEquals(cmid, ack.cmid)
         }
 
@@ -382,7 +386,8 @@ class FullSystemAtoZTest {
             val cmid = UUID.randomUUID().toString()
             send(WsFrame.Text(VesperJson.encodeToString(Frame.serializer(), HallSend(cmid, MessageKind.TEXT, MessageBody(hallSecret)))))
             val frames = mutableListOf<Frame>()
-            repeat(2) {
+            // Collect until both the broadcast and the ack arrived (presence frames may come first).
+            while (frames.none { it is Ack } || frames.none { it is HallMsg }) {
                 val f = incoming.receive() as WsFrame.Text
                 frames += VesperJson.decodeFromString(Frame.serializer(), f.readText())
             }

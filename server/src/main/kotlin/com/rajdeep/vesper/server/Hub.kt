@@ -53,6 +53,7 @@ class Hub {
     }
 
     fun isOnline(uid: String) = byUser[uid]?.isNotEmpty() == true
+    fun onlineDevices(uid: String): Set<Int> = byUser[uid]?.map { it.did }?.toSet() ?: emptySet()
     fun onlineCount() = byUser.size
     fun onlineUsers(): Set<String> = byUser.keys.toSet()
 

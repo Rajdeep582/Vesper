@@ -80,7 +80,9 @@ class PushService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         if (message.data["t"] == "wake") {
-            runCatching {
+            // Fetch right here (FCM gives us ~20 s); fall back to a background job only if that didn't finish,
+            // instead of always fetching twice.
+            val done = runCatching {
                 runBlocking(Dispatchers.IO) {
                     withTimeoutOrNull(15_000L) {
                         if (session.current() == null) session.load()
@@ -90,11 +92,13 @@ class PushService : FirebaseMessagingService() {
                                 launch { messages.syncHall() }
                             }
                             expiry.sweep()
+                            if (messages.hasPending()) OutboxWorker.kick(applicationContext)
                         }
-                    }
+                        true
+                    } ?: false
                 }
-            }
-            PushRegistrar.wake(applicationContext)
+            }.getOrDefault(false)
+            if (!done) PushRegistrar.wake(applicationContext)
         }
     }
 

@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.windowInsetsTopHeight
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -568,7 +570,8 @@ fun YouScreen(onConsole: (() -> Unit)? = null, vm: YouViewModel = hiltViewModel(
     var sheet by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(msg) { if (msg != null) { delay(3500); vm.message.value = null } }
     Box(Modifier.fillMaxSize().background(V.c.bg)) {
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        val youScroll = rememberScrollState()
+        Column(Modifier.fillMaxSize().verticalScroll(youScroll)) {
             com.rajdeep.vesper.ui.components.ProfileHero(
                 name = me?.username ?: "",
                 isAdmin = me?.isAdmin == true,
@@ -631,6 +634,12 @@ fun YouScreen(onConsole: (() -> Unit)? = null, vm: YouViewModel = hiltViewModel(
             Text("Vesper ${BuildConfig.VERSION_NAME}", style = V.t.mono, color = V.c.text3, modifier = Modifier.padding(20.dp).align(Alignment.CenterHorizontally))
             Spacer(Modifier.height(24.dp))
         }
+        // Status-bar scrim: once scrolled, content fades out under the clock instead of running into it.
+        val scrim by androidx.compose.animation.core.animateFloatAsState(if (youScroll.value > 8) 1f else 0f, Motion.tw(Motion.S), label = "scrim")
+        Box(
+            Modifier.fillMaxWidth().windowInsetsTopHeight(androidx.compose.foundation.layout.WindowInsets.Companion.statusBars).graphicsLayer { alpha = scrim }
+                .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(V.c.bg, V.c.bg.copy(alpha = 0.92f)))),
+        )
         Reveal(msg != null, modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 12.dp), enter = fadeIn() + scaleIn(initialScale = 0.9f), exit = fadeOut()) {
             Text(msg ?: "", style = V.t.label, color = V.c.text, modifier = Modifier.padding(horizontal = 20.dp).clip(RoundedCornerShape(14.dp)).background(V.c.s3).padding(14.dp))
         }

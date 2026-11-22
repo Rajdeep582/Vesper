@@ -84,29 +84,71 @@ class Notifier @Inject constructor(
     fun isViewing(peer: String) = foreground && viewingPeer == peer
     fun isViewingHall() = foreground && viewingHall
 
+    private fun allowed() = !(android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+    private fun preview(kind: MessageKind, text: String?) = when (kind) { MessageKind.TEXT -> text?.take(300) ?: ""; MessageKind.VOICE -> "🎤 Voice message"; MessageKind.IMAGE -> "📷 Photo"; MessageKind.FILE -> "📎 File" }
+    private val me = androidx.core.app.Person.Builder().setName("You").setKey("me").build()
+
+    /** Continues the conversation already on screen (WhatsApp-style stacked lines), or starts a new one. */
+    private fun styleFor(notifId: Int, title: String?, group: Boolean): NotificationCompat.MessagingStyle {
+        val sys = ctx.getSystemService(NotificationManager::class.java)
+        val old = runCatching { sys.activeNotifications.firstOrNull { it.id == notifId }?.notification }.getOrNull()
+        val st = old?.let { NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(it) } ?: NotificationCompat.MessagingStyle(me)
+        st.conversationTitle = title
+        st.isGroupConversation = group
+        while (st.messages.size > MAX_LINES) st.messages.removeAt(0)
+        return st
+    }
+
+    private fun actionIntent(action: String, scope: String, peer: String?, notifId: Int, mutable: Boolean): PendingIntent =
+        PendingIntent.getBroadcast(
+            ctx, (action + scope + (peer ?: "")).hashCode(),
+            Intent(ctx, NotificationActionReceiver::class.java).setAction(action)
+                .putExtra(EXTRA_SCOPE, scope).putExtra(EXTRA_PEER, peer).putExtra(EXTRA_NOTIF, notifId),
+            (if (mutable) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE) or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+    private fun replyAction(scope: String, peer: String?, notifId: Int, label: String): NotificationCompat.Action =
+        NotificationCompat.Action.Builder(R.drawable.ic_notification, "Reply", actionIntent(ACTION_REPLY, scope, peer, notifId, mutable = true))
+            .addRemoteInput(androidx.core.app.RemoteInput.Builder(KEY_REPLY).setLabel(label).build())
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
+            .setShowsUserInterface(false)
+            .setAllowGeneratedReplies(true)
+            .build()
+
+    private fun readAction(scope: String, peer: String?, notifId: Int): NotificationCompat.Action =
+        NotificationCompat.Action.Builder(R.drawable.ic_notification, "Mark as read", actionIntent(ACTION_READ, scope, peer, notifId, mutable = false))
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_MARK_AS_READ)
+            .setShowsUserInterface(false)
+            .build()
+
+    private fun openIntent(peer: String?, code: Int) = PendingIntent.getActivity(
+        ctx, code,
+        Intent(ctx, MainActivity::class.java).apply { peer?.let { putExtra(MainActivity.EXTRA_PEER, it) } }.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
     fun direct(peer: String, name: String, kind: MessageKind, text: String?, mid: String, expiresAt: Long) {
         if (isViewing(peer)) return
         if (settings.isTurnOffInboxNotifications() || settings.isPeerMuted(peer)) return
-        if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
-        val preview = when (kind) { MessageKind.TEXT -> text?.take(120) ?: ""; MessageKind.VOICE -> "Voice message"; MessageKind.IMAGE -> "Photo"; MessageKind.FILE -> "📎 File" }
-        val intent = PendingIntent.getActivity(
-            ctx, peer.hashCode(),
-            Intent(ctx, MainActivity::class.java).putExtra(MainActivity.EXTRA_PEER, peer).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
+        if (!allowed()) return
         val id = peer.hashCode()
+        val sender = androidx.core.app.Person.Builder().setName(name).setKey(peer).build()
+        val st = styleFor(id, null, false).addMessage(preview(kind, text), System.currentTimeMillis(), sender)
         val n = NotificationCompat.Builder(ctx, CHANNEL_DIRECT)
             .setSmallIcon(R.drawable.ic_notification)
             .setColor(0xFF8FA3C8.toInt())
+            .setStyle(st)
             .setContentTitle(name)
-            .setContentText(preview)
+            .setContentText(preview(kind, text))
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setAutoCancel(true)
             .setGroup("direct")
             .setTimeoutAfter((expiresAt - System.currentTimeMillis()).coerceAtLeast(1000))
-            .setContentIntent(intent)
+            .setContentIntent(openIntent(peer, id))
+            .addAction(replyAction(com.rajdeep.vesper.core.db.Scope.DIRECT, peer, id, "Reply to $name"))
+            .addAction(readAction(com.rajdeep.vesper.core.db.Scope.DIRECT, peer, id))
             .build()
         NotificationManagerCompat.from(ctx).notify(id, n)
         byMessage[mid] = id to expiresAt
@@ -116,54 +158,75 @@ class Notifier @Inject constructor(
         if (isViewingHall()) return
         if (mention) { mention(name, text, id, expiresAt, everyone); return }
         if (settings.isTurnOffHallNotifications()) return
-        if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
-        val preview = when (kind) { MessageKind.TEXT -> text?.take(120) ?: ""; MessageKind.VOICE -> "Voice message"; MessageKind.IMAGE -> "Photo"; MessageKind.FILE -> "📎 File" }
-        val intent = PendingIntent.getActivity(
-            ctx, 7002,
-            Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-        val notifId = 7002
+        if (!allowed()) return
+        val notifId = HALL_ID
+        val sender = androidx.core.app.Person.Builder().setName(name).setKey("hall:$name").build()
+        val st = styleFor(notifId, "The Hall", true).addMessage(preview(kind, text), System.currentTimeMillis(), sender)
         val n = NotificationCompat.Builder(ctx, CHANNEL_HALL)
             .setSmallIcon(R.drawable.ic_notification)
-            .setColor(0xFF8FA3C8.toInt())
-            .setContentTitle("Hall • $name")
-            .setContentText(preview)
+            .setColor(0xFFD4A853.toInt())
+            .setStyle(st)
+            .setContentTitle("The Hall")
+            .setContentText("$name: " + preview(kind, text))
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setAutoCancel(true)
             .setTimeoutAfter((expiresAt - System.currentTimeMillis()).coerceAtLeast(1000))
-            .setContentIntent(intent)
+            .setContentIntent(openIntent(null, notifId))
+            .addAction(replyAction(com.rajdeep.vesper.core.db.Scope.HALL, null, notifId, "Message the Hall"))
+            .addAction(readAction(com.rajdeep.vesper.core.db.Scope.HALL, null, notifId))
             .build()
         NotificationManagerCompat.from(ctx).notify(notifId, n)
         byMessage[id] = notifId to expiresAt
     }
 
+    /**
+     * After an inline reply: show "You: …" in the same notification, silently (no sound/vibration), and stop the
+     * spinner Android shows on the reply field. The chat itself updates from the database.
+     */
+    fun ownReply(notifId: Int, text: String) {
+        if (!allowed()) return
+        val sys = ctx.getSystemService(NotificationManager::class.java)
+        val old = runCatching { sys.activeNotifications.firstOrNull { it.id == notifId }?.notification }.getOrNull() ?: return
+        val st = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(old) ?: NotificationCompat.MessagingStyle(me)
+        st.addMessage(text, System.currentTimeMillis(), null as androidx.core.app.Person?)
+        while (st.messages.size > MAX_LINES) st.messages.removeAt(0)
+        val b = NotificationCompat.Builder(ctx, old)
+            .setStyle(st)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+        NotificationManagerCompat.from(ctx).notify(notifId, b.build())
+    }
+
+    fun cancel(notifId: Int) {
+        NotificationManagerCompat.from(ctx).cancel(notifId)
+        byMessage.entries.removeIf { it.value.first == notifId }
+    }
+
     /** @mention / @all: own channel, one notification per message, and it ignores every mute (like WhatsApp). */
     private fun mention(name: String, text: String?, id: String, expiresAt: Long, everyone: Boolean) {
-        if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
-        val intent = PendingIntent.getActivity(
-            ctx, 7003,
-            Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
+        if (!allowed()) return
         val notifId = MENTION_BASE + (id.hashCode() and 0xFFFF)
         val title = if (everyone) "$name @all in the Hall" else "$name mentioned you in the Hall"
         val body = text?.take(300) ?: "Replied to your message"
+        val sender = androidx.core.app.Person.Builder().setName(name).setKey("hall:$name").build()
+        val st = NotificationCompat.MessagingStyle(me).setConversationTitle(title).setGroupConversation(true)
+            .addMessage(body, System.currentTimeMillis(), sender)
         val n = NotificationCompat.Builder(ctx, CHANNEL_MENTION)
             .setSmallIcon(R.drawable.ic_notification)
             .setColor(0xFFD4A853.toInt())
+            .setStyle(st)
             .setContentTitle(title)
             .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setAutoCancel(true)
             .setGroup("mentions")
             .setTimeoutAfter((expiresAt - System.currentTimeMillis()).coerceAtLeast(1000))
-            .setContentIntent(intent)
+            .setContentIntent(openIntent(null, 7003))
+            .addAction(replyAction(com.rajdeep.vesper.core.db.Scope.HALL, null, notifId, "Reply in the Hall"))
             .build()
         NotificationManagerCompat.from(ctx).notify(notifId, n)
         byMessage[id] = notifId to expiresAt
@@ -195,6 +258,14 @@ class Notifier @Inject constructor(
         const val CHANNEL_HALL = "vesper_hall"
         const val CHANNEL_MENTION = "vesper_mention"
         const val MENTION_BASE = 0x7100000
+        const val HALL_ID = 7002
+        const val KEY_REPLY = "vesper_reply"
+        const val ACTION_REPLY = "com.rajdeep.vesper.REPLY"
+        const val ACTION_READ = "com.rajdeep.vesper.MARK_READ"
+        const val EXTRA_SCOPE = "scope"
+        const val EXTRA_PEER = "peer"
+        const val EXTRA_NOTIF = "notif"
+        private const val MAX_LINES = 8
     }
 }
 
@@ -238,6 +309,7 @@ class Expiry @Inject constructor(
             db.messages().delete(expired.map { it.localId })
         }
         if (full) {
+            runCatching { db.kv().purgeHallTombstones(session.now()) }
             val live = db.messages().allMediaJson().flatMap { runCatching { VesperJson.decodeFromString(MediaRef.serializer(), it).blobIds() }.getOrDefault(emptyList()) }.toSet()
             media.purgeOrphans(live)
         }
@@ -294,12 +366,14 @@ class SyncWorker @AssistedInject constructor(
 /** Holds the socket open only while the app is visible; drives the expiry ticker. */
 @Singleton
 class AppLifecycle @Inject constructor(
+    @ApplicationContext private val ctx: Context,
     private val rt: Realtime,
     private val session: SessionManager,
     private val expiry: Expiry,
     private val notifier: Notifier,
     private val messages: Messages,
 ) : DefaultLifecycleObserver {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     fun install() = ProcessLifecycleOwner.get().lifecycle.addObserver(this)
 
     override fun onStart(owner: LifecycleOwner) {
@@ -311,6 +385,8 @@ class AppLifecycle @Inject constructor(
         notifier.foreground = false
         rt.stop()
         expiry.stopTicker()
+        // Anything still in the outbox (sent just before leaving, or offline) is delivered in the background.
+        scope.launch { if (session.current() != null && messages.hasPending()) OutboxWorker.kick(ctx) }
     }
 
     fun onSignedIn() {

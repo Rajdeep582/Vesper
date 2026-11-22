@@ -68,20 +68,26 @@ class Push(private val db: Db, cfg: Config) {
 
     fun invalidateUser(uid: String) { fcmCache.remove(uid) }
 
-    fun wakeHall(uids: List<String>) {
+    /**
+     * Hall wakes are rate-limited per member (one per [HALL_COOLDOWN_MS]) — except for members called by name,
+     * @all, or replied to: those are woken at once so their mention notification isn't delayed.
+     */
+    fun wakeHall(uids: List<String>, urgent: Set<String> = emptySet()) {
         if (!enabled || uids.isEmpty()) return
-        val now = System.currentTimeMillis()
-        val toWake = uids.filter { uid ->
-            val last = hallWakeCooldown[uid] ?: 0L
-            if (now - last > 15 * 60 * 1000L) {
-                hallWakeCooldown[uid] = now
-                true
-            } else false
-        }
-        toWake.forEach { wake(it) }
+        hallTargets(uids, urgent, System.currentTimeMillis()).forEach { wake(it) }
     }
 
-    fun wake(uid: String) {
+    /** Which members get a Hall wake now (cooldown bookkeeping included). Pure apart from the cooldown map. */
+    internal fun hallTargets(uids: List<String>, urgent: Set<String>, now: Long): List<String> = uids.filter { uid ->
+        val last = hallWakeCooldown[uid] ?: 0L
+        if (uid in urgent || now - last > HALL_COOLDOWN_MS) {
+            hallWakeCooldown[uid] = now
+            true
+        } else false
+    }
+
+    /** Wakes every device of [uid] except [skipDevices] (devices already connected get the message live). */
+    fun wake(uid: String, skipDevices: Set<Int> = emptySet()) {
         if (!enabled) return
         scope.launch {
             val now = System.currentTimeMillis()
@@ -93,10 +99,12 @@ class Push(private val db: Db, cfg: Config) {
                 fcmCache[uid] = now to list
                 list
             }
-            if (devices.isEmpty()) return@launch
+            val targets = devices.filter { (it.int("d") ?: -1) !in skipDevices }
+            if (targets.isEmpty()) return@launch
             val bearer = runCatching { oauthToken() }.getOrNull() ?: return@launch
-            devices.forEach { d ->
-                val body = """{"message":{"token":"${d.str("fcm")}","data":{"t":"wake"},"android":{"priority":"high","ttl":"86400s"}}}"""
+            targets.forEach { d ->
+                // collapse_key: a burst of wakes for an offline phone is delivered as one.
+                val body = """{"message":{"token":"${d.str("fcm")}","data":{"t":"wake"},"android":{"priority":"high","ttl":"86400s","collapse_key":"wake"}}}"""
                 val res = runCatching {
                     http.send(
                         HttpRequest.newBuilder(URI("https://fcm.googleapis.com/v1/projects/$projectId/messages:send"))
@@ -120,5 +128,9 @@ class Push(private val db: Db, cfg: Config) {
                 }
             }
         }
+    }
+
+    companion object {
+        const val HALL_COOLDOWN_MS = 60_000L
     }
 }

@@ -261,5 +261,9 @@ class MediaService(private val db: Db, private val cfg: Config, val store: Media
         return gone + missingLedger
     }
 
-    suspend fun residentBytes(): Long = db.media.find().toList().sumOf { it.long("bytes") ?: 0 }
+    /** Sum on the database side instead of loading every media document. */
+    suspend fun residentBytes(): Long = runCatching {
+        db.media.aggregate(listOf(Document("\$group", Document("_id", null).append("t", Document("\$sum", "\$bytes"))))).toList()
+            .firstOrNull()?.let { (it["t"] as? Number)?.toLong() } ?: 0L
+    }.getOrElse { db.media.find().projection(Document("bytes", 1)).toList().sumOf { it.long("bytes") ?: 0 } }
 }

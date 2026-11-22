@@ -34,6 +34,10 @@
             </intent-filter>
         </activity>
 
+        <receiver
+            android:name=".data.NotificationActionReceiver"
+            android:exported="false" />
+
         <service
             android:name=".data.PushService"
             android:exported="false">

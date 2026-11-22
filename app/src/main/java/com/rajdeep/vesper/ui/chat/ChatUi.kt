@@ -218,7 +218,7 @@ fun MessageBubble(
 
     val fresh = remember(m.localId) { kotlin.math.abs(System.currentTimeMillis() - m.createdAt) < 4_000 }
     val selTint by androidx.compose.animation.animateColorAsState(if (selected) V.accent.copy(alpha = 0.12f) else androidx.compose.ui.graphics.Color.Transparent, tween(Motion.M), label = "selTint")
-    val pressScale by animateFloatAsState(if (selected) 0.965f else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 520f), label = "selScale")
+    val pressScale by animateFloatAsState(if (selected) 0.965f else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.72f, stiffness = 520f), label = "selScale")
 
     val swipeOffset = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = rememberCoroutineScope()
@@ -232,7 +232,7 @@ fun MessageBubble(
         // Swipe right only (like WhatsApp). Past the trigger, resistance grows — a rubber-band feel.
         val resistance = if (current < triggerPx) 0.75f else 0.75f / (1f + (current - triggerPx) / (triggerPx * 0.6f))
         val newOffset = (current + delta * resistance).coerceIn(0f, triggerPx * 1.8f)
-        scope.launch { swipeOffset.snapTo(newOffset) }
+        scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { swipeOffset.snapTo(newOffset) }
         val passed = kotlin.math.abs(newOffset) >= triggerPx
         if (passed && !triggered) {
             triggered = true
@@ -254,7 +254,8 @@ fun MessageBubble(
                 }
                 triggered = false
                 // Snap home with a little overshoot, carrying the release velocity.
-                scope.launch { swipeOffset.animateTo(0f, androidx.compose.animation.core.spring(dampingRatio = 0.58f, stiffness = 520f), initialVelocity = velocity * 0.4f) }
+                // Critically-damped-ish return: snaps home without flicking past the start.
+                scope.launch { swipeOffset.animateTo(0f, androidx.compose.animation.core.spring(dampingRatio = 0.8f, stiffness = 520f), initialVelocity = velocity * 0.4f) }
             }
         )
     } else Modifier
@@ -440,7 +441,7 @@ private fun QuotedReplyCard(reply: com.rajdeep.vesper.shared.ReplyRef, onClick: 
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 5.dp)
             .clip(RoundedCornerShape(10.dp))
-            .background(Color.Black.copy(alpha = 0.22f))
+            .background(if (V.c.dark) Color.Black.copy(alpha = 0.22f) else V.c.text.copy(alpha = 0.06f))
             .pressable(scaleTo = 0.98f, onClick = onClick)
             .padding(end = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1674,7 +1675,7 @@ private fun PausedRecordingBar(
 /** Selection marker: hollow ring that springs into a filled accent disc with a check. */
 @Composable
 fun SelectDot(selected: Boolean, modifier: Modifier = Modifier) {
-    val fill by animateFloatAsState(if (selected) 1f else 0f, androidx.compose.animation.core.spring(dampingRatio = 0.5f, stiffness = 600f), label = "dot")
+    val fill by animateFloatAsState(if (selected) 1f else 0f, androidx.compose.animation.core.spring(dampingRatio = 0.62f, stiffness = 600f), label = "dot")
     Box(
         modifier.size(22.dp).clip(CircleShape)
             .border(1.5.dp, if (selected) V.accent else V.c.text3, CircleShape),

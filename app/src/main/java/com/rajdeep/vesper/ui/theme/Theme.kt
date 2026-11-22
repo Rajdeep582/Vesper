@@ -201,6 +201,15 @@ fun VesperTheme(prefs: Prefs, content: @Composable () -> Unit) {
     val ctx = LocalContext.current
     val view = LocalView.current
     val sounds = remember { runCatching { Sounds(ctx.applicationContext) }.getOrNull() }
+    // System bar icons follow the app theme (dark icons on the light theme), not the system's.
+    if (!view.isInEditMode) androidx.compose.runtime.SideEffect {
+        (view.context as? android.app.Activity)?.window?.let { w ->
+            androidx.core.view.WindowCompat.getInsetsController(w, view).apply {
+                isAppearanceLightStatusBars = !dark
+                isAppearanceLightNavigationBars = !dark
+            }
+        }
+    }
     val fb = remember(prefs, view) { Feedback(view, sounds, prefs) }
     val scheme = if (dark) darkColorScheme(
         primary = p.hall, onPrimary = p.onAccent, background = p.bg, onBackground = p.text, surface = p.s1, onSurface = p.text,

@@ -257,6 +257,8 @@ private fun Route.memberRoutes(s: Services) {
         if (allowed.isNotEmpty()) s.hall.delete(allowed)
         call.respond(Ok())
     }
+    /** Read receipts over HTTP (used when the socket isn't up, e.g. "Mark as read" from a notification). */
+    post("/direct/read") { s.direct.read(call.caller(), call.receive<com.rajdeep.vesper.shared.DirectRead>()); call.respond(Ok()) }
     post("/direct/receipts") { call.respond(s.direct.receipts(call.caller(), call.receive<com.rajdeep.vesper.shared.ReceiptQuery>())) }
     post("/direct/ack") { s.direct.ack(call.caller(), DirectAck(call.receive<AckIds>().ids)); call.respond(Ok()) }
 

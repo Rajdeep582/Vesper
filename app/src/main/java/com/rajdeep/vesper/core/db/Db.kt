@@ -237,6 +237,10 @@ interface KvDao {
     @Query("DELETE FROM kv WHERE `key` = :k") suspend fun remove(k: String)
     /** People this user has talked to privately (key contact:<id>, value = last activity ms). Survives message expiry. */
     @Query("SELECT * FROM kv WHERE `key` LIKE 'contact:%'") fun contacts(): Flow<List<KvEntity>>
+    /** Read receipts waiting for a connection (key rr:<peer>, value = comma-separated message ids). */
+    @Query("SELECT * FROM kv WHERE `key` LIKE 'rr:%'") suspend fun pendingReads(): List<KvEntity>
+    /** "Delete for me" Hall tombstones (key hid:<id>, value = expiry ms) that can be dropped once the message is gone. */
+    @Query("DELETE FROM kv WHERE `key` LIKE 'hid:%' AND CAST(value AS INTEGER) > 1 AND CAST(value AS INTEGER) < :now") suspend fun purgeHallTombstones(now: Long)
 }
 
 @Dao
