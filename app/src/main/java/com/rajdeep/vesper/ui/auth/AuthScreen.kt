@@ -133,7 +133,7 @@ class AuthViewModel @Inject constructor(private val repo: AuthRepository) : View
         ui.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             runCatching { repo.authenticate(s.username, s.password, s.signUp) }
-                .onFailure { e -> ui.update { it.copy(busy = false, error = (e as? ApiException)?.message ?: "Couldn't reach Vesper. Check your connection.") } }
+                .onFailure { e -> android.util.Log.w("VesperAuth", "authenticate failed", e); ui.update { it.copy(busy = false, error = (e as? ApiException)?.message ?: "Couldn't reach Vesper. Check your connection.") } }
                 .onSuccess { ui.update { it.copy(busy = false) } }
         }
     }

@@ -94,12 +94,16 @@ class Api @Inject constructor(private val session: SessionManager) {
             }
             _reach.value = Reach.ONLINE
             if (code == 401 && auth) {
-                if (refresh(used[0])) {
-                    val (c2, t2) = raw(method, path, body, auth)
-                    return@withContext checked(c2, t2)
+                when (refreshResult(used[0])) {
+                    RefreshResult.OK -> {
+                        val (c2, t2) = raw(method, path, body, auth)
+                        return@withContext checked(c2, t2)
+                    }
+                    // Only a definitive server rejection ends the session (refreshResult already did that).
+                    RefreshResult.REJECTED -> throw ApiException(401, "unauthorized", "Please sign in again")
+                    // Network blip / cold server: keep the session, let the caller retry later.
+                    RefreshResult.UNREACHABLE -> throw ApiException(503, "unreachable", "Can't reach the server right now")
                 }
-                session.end("expired")
-                throw ApiException(401, "unauthorized", "Please sign in again")
             }
             return@withContext checked(code, text)
         }
@@ -112,22 +116,27 @@ class Api @Inject constructor(private val session: SessionManager) {
         throw ApiException(code, err?.code ?: "http_$code", err?.message ?: "Something went wrong ($code)")
     }
 
-    /** Rotates tokens; returns false when the session is no longer valid. */
-    suspend fun refresh(failedToken: String?): Boolean = refreshLock.withLock {
-        val s = session.current() ?: return false
+    enum class RefreshResult { OK, REJECTED, UNREACHABLE }
+
+    /** Rotates tokens; returns false when it didn't (session over, or server unreachable for now). */
+    suspend fun refresh(failedToken: String?): Boolean = refreshResult(failedToken) == RefreshResult.OK
+
+    suspend fun refreshResult(failedToken: String?): RefreshResult = refreshLock.withLock {
+        val s = session.current() ?: return RefreshResult.REJECTED
         // Another caller already rotated while we waited.
-        if (failedToken != null && s.accessToken != failedToken) return true
+        if (failedToken != null && s.accessToken != failedToken) return RefreshResult.OK
         val body = VesperJson.encodeToString(RefreshRequest.serializer(), RefreshRequest(s.refreshToken)).toRequestBody(json)
-        val (code, text) = runCatching { raw("POST", "/v1/auth/refresh", body, auth = false) }.getOrElse { return false }
+        // A timeout / dropped connection is NOT a rejection: never sign the user out for it.
+        val (code, text) = runCatching { raw("POST", "/v1/auth/refresh", body, auth = false) }.getOrElse { return RefreshResult.UNREACHABLE }
         if (code != 200) {
             // Server definitively rejected the refresh token: the session is over (revoked, password changed, suspended).
-            if (code == 401) session.end("expired")
-            if (code == 403) session.end(if (text.contains("suspended")) "suspended" else "expired")
-            return false
+            if (code == 401) { session.end("expired"); return RefreshResult.REJECTED }
+            if (code == 403) { session.end(if (text.contains("suspended")) "suspended" else "expired"); return RefreshResult.REJECTED }
+            return RefreshResult.UNREACHABLE // 5xx / waking / rate limited: try again later
         }
-        val pair = VesperJson.decodeFromString(TokenPair.serializer(), text)
+        val pair = runCatching { VesperJson.decodeFromString(TokenPair.serializer(), text) }.getOrNull() ?: return RefreshResult.UNREACHABLE
         session.updateTokens(pair)
-        true
+        RefreshResult.OK
     }
 
     suspend fun <R> get(path: String, out: KSerializer<R>, auth: Boolean = true): R =

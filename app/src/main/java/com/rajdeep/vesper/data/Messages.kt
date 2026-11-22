@@ -50,6 +50,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -109,6 +110,9 @@ class Messages @Inject constructor(
     val directTypers: Flow<Set<String>> = _typers.map { m -> m.values.filter { it.to != null }.map { it.id }.toSet() }.distinctUntilChanged()
     private val _online = MutableStateFlow<Set<String>>(emptySet())
     val onlineUsers: StateFlow<Set<String>> = _online
+    private val _lastSeen = MutableStateFlow<Map<String, Long>>(emptyMap())
+    /** When we saw a member go offline (this session only — nothing is stored). */
+    val lastSeen: StateFlow<Map<String, Long>> = _lastSeen
     private val typingSentAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     /** Called on every keystroke; throttled to one frame per 3 s per chat, plus an explicit stop. */
@@ -147,7 +151,16 @@ class Messages @Inject constructor(
             }
         }
         // Lost the socket: presence and typing are unknown, so show nothing rather than stale state.
-        scope.launch { rt.link.collect { if (it != com.rajdeep.vesper.core.net.Link.ONLINE) { _online.value = emptySet(); _typers.value = emptyMap(); typingSentAt.clear() } } }
+        // Debounced: a quick background→foreground blip must not blank every green dot (that read as flicker).
+        scope.launch {
+            rt.link.collectLatest {
+                if (it != com.rajdeep.vesper.core.net.Link.ONLINE) {
+                    _typers.value = emptyMap(); typingSentAt.clear()
+                    kotlinx.coroutines.delay(8_000)
+                    _online.value = emptySet()
+                }
+            }
+        }
     }
 
     fun hall(): Flow<List<MessageEntity>> = dao.hall()
@@ -463,6 +476,7 @@ class Messages @Inject constructor(
             }
             is com.rajdeep.vesper.shared.Presence -> {
                 _online.value = if (f.online) _online.value + f.userId else _online.value - f.userId
+                if (!f.online) _lastSeen.value = _lastSeen.value + (f.userId to (f.lastActiveAt.takeIf { it > 0 }?.let { it - (session.current()?.clockSkewMs ?: 0L) } ?: System.currentTimeMillis()))
                 if (!f.online) _typers.value = _typers.value.filterValues { it.id != f.userId }
             }
             is com.rajdeep.vesper.shared.PresenceSnapshot -> _online.value = f.online.toSet()

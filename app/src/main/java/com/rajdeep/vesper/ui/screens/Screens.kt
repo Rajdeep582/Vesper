@@ -1,5 +1,6 @@
 package com.rajdeep.vesper.ui.screens
 
+import androidx.compose.material.icons.rounded.Insights
 import com.rajdeep.vesper.ui.components.springOverscroll
 import com.rajdeep.vesper.ui.components.Reveal
 import androidx.compose.animation.AnimatedVisibility
@@ -529,6 +530,10 @@ class YouViewModel @Inject constructor(
         settings.setTurnOffHallNotifications(v)
         if (v) notifier.cancelHall()
     }
+    fun pauseAll(v: Boolean) = viewModelScope.launch {
+        settings.setPauseAll(v)
+        if (v) { notifier.cancelHall(); notifier.cancelDirectAll() }
+    }
     fun turnOffInboxNotifications(v: Boolean) = viewModelScope.launch {
         settings.setTurnOffInboxNotifications(v)
         if (v) notifier.cancelDirectAll()
@@ -548,7 +553,7 @@ class YouViewModel @Inject constructor(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun YouScreen(vm: YouViewModel = hiltViewModel()) {
+fun YouScreen(onConsole: (() -> Unit)? = null, vm: YouViewModel = hiltViewModel()) {
     val prefs by vm.prefs.collectAsState()
     val devices by vm.devices.collectAsState()
     val msg by vm.message.collectAsState()
@@ -579,8 +584,6 @@ fun YouScreen(vm: YouViewModel = hiltViewModel()) {
                         ) { Text(t.name.lowercase().replaceFirstChar { it.uppercase() }, style = V.t.label, color = if (sel) V.c.text else V.c.text2) }
                     }
                 }
-                Hairline()
-                ToggleRow("Reduce motion", "Simpler transitions", prefs.reduceMotion, vm::motion)
             }
             SectionLabel("Feedback")
             Group {
@@ -588,8 +591,25 @@ fun YouScreen(vm: YouViewModel = hiltViewModel()) {
                 Hairline()
                 ToggleRow("Haptics", "Light touch feedback", prefs.haptics, vm::haptics)
             }
+            if (onConsole != null) {
+                SectionLabel("Administration")
+                Group {
+                    ListRow(onClick = onConsole, leading = {
+                        Box(Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(V.c.console.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Rounded.Insights, null, tint = V.c.console, modifier = Modifier.size(20.dp))
+                        }
+                    }, trailing = { Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = V.c.text3) }) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Console", style = V.t.body, color = V.c.text)
+                            Text("Members, activity and moderation", style = V.t.label, color = V.c.text2)
+                        }
+                    }
+                }
+            }
             SectionLabel("Notifications")
             Group {
+                ToggleRow("Turn Off All Notifications", "Silence every Vesper notification", prefs.pauseAll, vm::pauseAll)
+                Hairline()
                 ToggleRow("Turn Off Hall Notifications", "Mute all notifications from the Hall", prefs.turnOffHallNotifications, vm::turnOffHallNotifications)
                 Hairline()
                 ToggleRow("Turn Off Inbox Notifications", "Mute all notifications from private chats", prefs.turnOffInboxNotifications, vm::turnOffInboxNotifications)

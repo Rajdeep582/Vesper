@@ -1,5 +1,15 @@
 package com.rajdeep.vesper.ui.chat
 
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.VerifiedUser
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.NotificationsOff
+import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.calculateCentroid
@@ -162,6 +172,7 @@ class ChatViewModel @Inject constructor(
     private val admin: AdminRepository,
     private val people: PeopleRepository,
     private val notifier: Notifier,
+    private val settings: com.rajdeep.vesper.data.Settings,
     rt: Realtime,
     api: Api,
 ) : ViewModel() {
@@ -188,6 +199,27 @@ class ChatViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val peerOnline: StateFlow<Boolean> = messages.onlineUsers.map { peer != null && peer != myId && peer in it }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
     fun typing(on: Boolean) = messages.typing(peer, on)
+    val peerLastSeen: StateFlow<Long?> = messages.lastSeen.map { peer?.let { p -> it[p] } }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val chatMuted: StateFlow<Boolean> = settings.prefs.map { peer != null && peer in it.mutedPeers }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    fun setChatMuted(v: Boolean) = viewModelScope.launch { peer?.let { settings.setPeerMuted(it, v); if (v) notifier.cancelFor(it) } }
+
+    /** Plain-text transcript of what's on this phone (decrypted locally; nothing leaves the device unless the user saves it). */
+    fun transcript(title: String, rows: List<MessageEntity>): String = buildString {
+        val df = java.text.SimpleDateFormat("dd MMM yyyy, HH:mm", java.util.Locale.getDefault())
+        appendLine("Vesper — $title")
+        appendLine("Exported " + df.format(java.util.Date()) + " · ${rows.count { it.state != MsgState.SYSTEM }} messages")
+        appendLine()
+        rows.forEach { m ->
+            if (m.state == MsgState.SYSTEM) return@forEach
+            val who = if (m.outgoing) "You" else m.senderName
+            val body = when (MessageKind.valueOf(m.kind)) {
+                MessageKind.TEXT -> m.text ?: ""
+                MessageKind.VOICE -> "[Voice message" + (m.ref?.durationMs?.let { " " + (it / 1000).let { s -> "%d:%02d".format(s / 60, s % 60) } } ?: "") + "]"
+                MessageKind.IMAGE -> "[Photo]"
+            }
+            appendLine("[" + df.format(java.util.Date(m.acceptedAt ?: m.createdAt)) + "] " + who + ": " + body)
+        }
+    }
     fun refreshOnline() {
         if (peer == null) viewModelScope.launch { runCatching { messages.onlineCount() } }
     }
@@ -310,6 +342,27 @@ fun ChatScreen(
     var menuFor by remember { mutableStateOf<MessageEntity?>(null) }
     var infoSheet by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
+    var searchQ by remember { mutableStateOf<String?>(null) }
+    var hitIdx by remember { mutableIntStateOf(0) }
+    val hits = remember(items, searchQ) {
+        val q = searchQ?.trim().orEmpty()
+        if (q.length < 1) emptyList() else items.indices.filter { items[it].text?.contains(q, ignoreCase = true) == true }
+    }
+    val hitId = hits.getOrNull(hitIdx)?.let { items.getOrNull(it)?.localId }
+    LaunchedEffect(hits, hitIdx) { hits.getOrNull(hitIdx)?.let { listState.animateScrollToItem(it, -200) } }
+    LaunchedEffect(hits.size) { hitIdx = (hits.size - 1).coerceAtLeast(0) }
+    androidx.activity.compose.BackHandler(enabled = searchQ != null && com.rajdeep.vesper.ui.components.LocalTabActive.current) { searchQ = null }
+    val chatMuted by vm.chatMuted.collectAsState()
+    val peerLastSeen by vm.peerLastSeen.collectAsState()
+    val ctxExport = androidx.compose.ui.platform.LocalContext.current
+    val exportTitle = if (vm.peer != null && vm.peer == vm.myId) "Notes to self" else (vm.peerUser?.value?.username ?: "chat")
+    val exportScope = rememberCoroutineScope()
+    val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        if (uri != null) exportScope.launch(Dispatchers.IO) {
+            val ok = runCatching { ctxExport.contentResolver.openOutputStream(uri)?.use { it.write(vm.transcript(exportTitle, items).toByteArray()) } }.isSuccess
+            vm.error.value = if (ok) "Chat exported" else "Couldn't export chat"
+        }
+    }
     var deleteAsk by remember { mutableStateOf<List<String>?>(null) }
     val tabActive = com.rajdeep.vesper.ui.components.LocalTabActive.current
     val selected = remember { androidx.compose.runtime.mutableStateListOf<String>() }
@@ -382,7 +435,33 @@ fun ChatScreen(
                 },
                 label = "header",
             ) { sel ->
-                if (!sel) ChatHeader(vm.scope, (if (vm.peer != null && vm.peer == vm.myId) "Notes to self" else peerUser?.username), onBack, onOpenInfo, items.size, link, online, typers, peerOnline)
+                if (!sel) androidx.compose.animation.AnimatedContent(
+                    searchQ != null,
+                    transitionSpec = { (fadeIn(Motion.tw(Motion.M)) + scaleIn(Motion.spring(), initialScale = 0.98f)) togetherWith fadeOut(Motion.tw(Motion.S)) },
+                    label = "search",
+                ) { searching ->
+                    if (searching) ChatSearchBar(searchQ.orEmpty(), { searchQ = it }, hits.size, hitIdx,
+                        onPrev = { if (hits.isNotEmpty()) hitIdx = (hitIdx - 1 + hits.size) % hits.size },
+                        onNext = { if (hits.isNotEmpty()) hitIdx = (hitIdx + 1) % hits.size },
+                        onClose = { searchQ = null })
+                    else ChatHeader(
+                        vm.scope, (if (vm.peer != null && vm.peer == vm.myId) "Notes to self" else peerUser?.username), onBack, onOpenInfo, items.size, link, online, typers, peerOnline,
+                        lastSeen = peerLastSeen,
+                        menu = if (vm.scope == Scope.DIRECT) ({ close ->
+                            ChatMenuItem(Icons.Rounded.Search, "Search") { close(); searchQ = ""; hitIdx = 0 }
+                            if (vm.peer != vm.myId) ChatMenuItem(if (chatMuted) Icons.Rounded.NotificationsActive else Icons.Rounded.NotificationsOff, if (chatMuted) "Unmute notifications" else "Mute notifications") {
+                                close(); vm.setChatMuted(!chatMuted); vm.error.value = if (chatMuted) "Notifications on" else "Chat muted"
+                            }
+                            ChatMenuItem(Icons.Rounded.Download, "Export chat") {
+                                close()
+                                val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmm", java.util.Locale.US).format(java.util.Date())
+                                exporter.launch("Vesper-" + exportTitle.replace(Regex("[^A-Za-z0-9._-]"), "_") + "-" + stamp + ".txt")
+                            }
+                            if (onOpenInfo != null && vm.peer != vm.myId) ChatMenuItem(Icons.Rounded.VerifiedUser, "Contact & safety number") { close(); onOpenInfo() }
+                            ChatMenuItem(Icons.Rounded.DeleteSweep, "Clear chat", danger = true) { close(); confirmClear = true }
+                        }) else null,
+                    )
+                }
                 else {
                     val chosen = items.filter { it.localId in selected }
                     val clipboard = LocalClipboard.current
@@ -402,7 +481,14 @@ fun ChatScreen(
                     )
                 }
             }
-            Banner(link != Link.ONLINE || reach == Reach.WAKING, when {
+            // Debounced: returning from the background reconnects within a second; showing (and hiding) the banner
+            // for that blip pushed the whole list down and back up — the "flicker" on reopen.
+            var showBanner by remember { mutableStateOf(false) }
+            LaunchedEffect(link, reach) {
+                if (link == Link.ONLINE && reach != Reach.WAKING) showBanner = false
+                else { kotlinx.coroutines.delay(1_500); showBanner = true }
+            }
+            Banner(showBanner, when {
                 reach == Reach.WAKING -> "Waking the server…"
                 link == Link.CONNECTING -> "Connecting…"
                 else -> "Offline — messages will send when you're back"
@@ -446,6 +532,7 @@ fun ChatScreen(
                                 onLongPress = { fb.longPress(); if (m.state != MsgState.SYSTEM) { if (m.localId !in selected) selected.add(m.localId) } },
                                 onImage = { if (selecting) toggle(m) else viewer = it },
                                 onRetry = { vm.retry(m.localId) },
+                                highlighted = m.localId == hitId,
                                 selecting = selecting,
                                 selected = m.localId in selected,
                                 onToggle = { toggle(m) },
@@ -572,6 +659,7 @@ fun ChatScreen(
                                 },
                                 onAttach = { attachOpen = true },
                                 onTyping = { vm.typing(it) },
+                                draftKey = vm.peer ?: "hall",
                                 onRecordStart = {
                                     if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                                         if (!pendingRecord) { pendingRecord = true; micPermission.launch(Manifest.permission.RECORD_AUDIO) }
@@ -726,7 +814,11 @@ private fun OnlinePill(n: Int) {
 }
 
 @Composable
-private fun ChatHeader(scope: String, peerName: String?, onBack: (() -> Unit)?, onInfo: (() -> Unit)?, count: Int, link: Link, online: Int = 0, typers: List<String> = emptyList(), peerOnline: Boolean = false) {
+private fun ChatHeader(
+    scope: String, peerName: String?, onBack: (() -> Unit)?, onInfo: (() -> Unit)?, count: Int, link: Link, online: Int = 0,
+    typers: List<String> = emptyList(), peerOnline: Boolean = false, lastSeen: Long? = null,
+    menu: (@Composable androidx.compose.foundation.layout.ColumnScope.(close: () -> Unit) -> Unit)? = null,
+) {
     Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         if (onBack != null) IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = V.c.text, onClick = onBack) else Spacer(Modifier.width(16.dp))
         if (scope == Scope.DIRECT) {
@@ -748,12 +840,31 @@ private fun ChatHeader(scope: String, peerName: String?, onBack: (() -> Unit)?, 
                                     } else {
                                         Icon(Icons.Rounded.Lock, null, tint = V.accent, modifier = Modifier.size(11.dp))
                                         Spacer(Modifier.width(4.dp))
-                                        Text(if (peerName == "Notes to self") "Only on this phone" else "End-to-end encrypted", style = V.t.caption, color = V.c.text2)
+                                        Text(
+                                            when {
+                                                peerName == "Notes to self" -> "Only on this phone"
+                                                lastSeen != null -> "last seen " + lastSeenLabel(lastSeen)
+                                                else -> "End-to-end encrypted"
+                                            },
+                                            style = V.t.caption, color = V.c.text2,
+                                        )
                                     }
                                 }
                             }
                         },
                     )
+                }
+            }
+            if (menu != null) {
+                var open by remember { mutableStateOf(false) }
+                Box {
+                    IconAction(Icons.Rounded.MoreVert, "More options", tint = V.c.text) { open = true }
+                    androidx.compose.material3.DropdownMenu(
+                        expanded = open, onDismissRequest = { open = false },
+                        shape = RoundedCornerShape(18.dp), containerColor = V.c.s2,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, V.c.hairline),
+                        offset = androidx.compose.ui.unit.DpOffset((-6).dp, 0.dp),
+                    ) { menu { open = false } }
                 }
             }
         } else {
@@ -1007,5 +1118,51 @@ private fun TypingBubble(names: List<String>) {
                     .padding(horizontal = 16.dp, vertical = 13.dp),
             ) { com.rajdeep.vesper.ui.components.TypingDots(V.c.text2, 6.dp) }
         }
+    }
+}
+
+
+@Composable
+private fun ChatMenuItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, danger: Boolean = false, onClick: () -> Unit) {
+    val c = if (danger) V.c.error else V.c.text
+    androidx.compose.material3.DropdownMenuItem(
+        text = { Text(label, style = V.t.body, color = c) },
+        leadingIcon = { Icon(icon, null, tint = if (danger) V.c.error else V.c.text2, modifier = Modifier.size(20.dp)) },
+        onClick = onClick,
+        modifier = Modifier.padding(horizontal = 4.dp).clip(RoundedCornerShape(12.dp)),
+    )
+}
+
+private fun lastSeenLabel(t: Long): String {
+    val d = System.currentTimeMillis() - t
+    return when {
+        d < 60_000 -> "just now"
+        d < 3_600_000 -> "${d / 60_000} min ago"
+        else -> "at " + java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(t))
+    }
+}
+
+@Composable
+private fun ChatSearchBar(q: String, onQ: (String) -> Unit, count: Int, idx: Int, onPrev: () -> Unit, onNext: () -> Unit, onClose: () -> Unit) {
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 6.dp, bottom = 6.dp).heightIn(min = 50.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Close search", tint = V.c.text, onClick = onClose)
+        Row(
+            Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).background(V.c.s2).border(1.dp, V.accent.copy(alpha = 0.4f), RoundedCornerShape(16.dp)).padding(horizontal = 14.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Rounded.Search, null, tint = V.accent, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Box(Modifier.weight(1f)) {
+                if (q.isEmpty()) Text("Search messages", style = V.t.body, color = V.c.text3)
+                androidx.compose.foundation.text.BasicTextField(q, onQ, singleLine = true, textStyle = V.t.body.copy(color = V.c.text), cursorBrush = androidx.compose.ui.graphics.SolidColor(V.accent), modifier = Modifier.fillMaxWidth().focusRequester(focus))
+            }
+            androidx.compose.animation.AnimatedContent(if (q.isBlank()) "" else if (count == 0) "0" else "${idx + 1}/$count", label = "cnt") {
+                Text(it, style = V.t.mono.copy(fontSize = V.t.caption.fontSize), color = V.c.text2)
+            }
+        }
+        IconAction(Icons.Rounded.KeyboardArrowUp, "Previous match", tint = if (count > 0) V.c.text else V.c.text3, onClick = onPrev)
+        IconAction(Icons.Rounded.KeyboardArrowDown, "Next match", tint = if (count > 0) V.c.text else V.c.text3, onClick = onNext)
     }
 }

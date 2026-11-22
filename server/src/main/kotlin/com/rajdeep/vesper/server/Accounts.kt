@@ -125,23 +125,35 @@ class Accounts(
         return AuthResponse(access, refresh, exp, UserDto(uid, username, joinedAt, role == "admin"), did, now)
     }
 
+    private val REFRESH_REUSE_GRACE_MS = 2L * 60 * 1000
+
     suspend fun refresh(token: String): TokenPair {
         val now = ServerClock.now()
         val rec = db.refresh.one(Document("_id", sha256Hex(token))) ?: unauthorized()
         val uid = rec.str("uid")!!
         val did = rec.int("d")!!
         if (rec["used"] == true) {
-            // Reuse of a rotated token: assume theft, revoke this device entirely.
-            revokeDevice(uid, did, "session_reused")
-            unauthorized()
+            // A phone that never received the rotated pair (timeout on a cold server, app killed mid-request,
+            // flaky network) legitimately retries with the old token moments later. Allow that within a short
+            // grace window — the successor is retired so only one live token remains. Outside it: assume theft.
+            val usedAt = rec.millis("usedAt") ?: 0L
+            if (usedAt == 0L || now - usedAt > REFRESH_REUSE_GRACE_MS) {
+                revokeDevice(uid, did, "session_reused")
+                unauthorized()
+            }
+            rec.str("next")?.let { db.refresh.deleteOne(Document("_id", it)) }
         }
         if ((rec.millis("exp") ?: 0) < now) unauthorized()
         val user = db.users.one(Document("_id", uid)) ?: unauthorized()
         if (user.str("st") == "suspended") forbidden("suspended", "This account is suspended")
         db.devices.one(Document("uid", uid).append("d", did)) ?: unauthorized()
-        db.refresh.updateOne(Document("_id", rec.str("_id")), Updates.set("used", true))
         val (access, exp) = tokens.access(uid, did, user.str("role") ?: "member", now)
         val next = Tokens.newRefresh()
+        db.refresh.updateOne(
+            Document("_id", rec.str("_id")),
+            Updates.combine(Updates.set("used", true), Updates.set("next", sha256Hex(next)), if (rec["used"] == true) Updates.set("graceUsed", true) else Updates.set("usedAt", now.asDate())),
+        )
+        db.devices.updateOne(Document("uid", uid).append("d", did), Updates.set("seen", now.asDate()))
         db.refresh.insertOne(doc("_id" to sha256Hex(next), "uid" to uid, "d" to did, "used" to false, "at" to now.asDate(), "exp" to (now + Tokens.REFRESH_TTL_MS).asDate()))
         return TokenPair(access, next, exp, now)
     }

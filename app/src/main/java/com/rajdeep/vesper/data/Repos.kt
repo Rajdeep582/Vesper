@@ -160,6 +160,8 @@ data class Prefs(
     val disclosureSeen: Boolean = false,
     val turnOffHallNotifications: Boolean = false,
     val turnOffInboxNotifications: Boolean = false,
+    val pauseAll: Boolean = false,
+    val mutedPeers: Set<String> = emptySet(),
 )
 
 /** Non-sensitive UI preferences only. */
@@ -171,6 +173,8 @@ class Settings @Inject constructor(@ApplicationContext private val ctx: Context)
     private val motion = booleanPreferencesKey("reduce_motion")
     private val turnOffHall = booleanPreferencesKey("turn_off_hall_notifications")
     private val turnOffInbox = booleanPreferencesKey("turn_off_inbox_notifications")
+    private val pauseAllKey = booleanPreferencesKey("pause_all_notifications")
+    private val mutedKey = androidx.datastore.preferences.core.stringSetPreferencesKey("muted_peers")
 
     @Volatile
     private var cachedPrefs: Prefs = runCatching {
@@ -183,6 +187,8 @@ class Settings @Inject constructor(@ApplicationContext private val ctx: Context)
                     reduceMotion = p[motion] ?: false,
                     turnOffHallNotifications = p[turnOffHall] ?: false,
                     turnOffInboxNotifications = p[turnOffInbox] ?: false,
+                    pauseAll = p[pauseAllKey] ?: false,
+                    mutedPeers = p[mutedKey] ?: emptySet(),
                 )
             }.first()
         }
@@ -196,11 +202,24 @@ class Settings @Inject constructor(@ApplicationContext private val ctx: Context)
             reduceMotion = p[motion] ?: false,
             turnOffHallNotifications = p[turnOffHall] ?: false,
             turnOffInboxNotifications = p[turnOffInbox] ?: false,
+            pauseAll = p[pauseAllKey] ?: false,
+            mutedPeers = p[mutedKey] ?: emptySet(),
         ).also { cachedPrefs = it }
     }
 
-    fun isTurnOffHallNotifications(): Boolean = cachedPrefs.turnOffHallNotifications
-    fun isTurnOffInboxNotifications(): Boolean = cachedPrefs.turnOffInboxNotifications
+    // The master switch silences everything; the per-area switches and per-chat mutes stack on top of it.
+    fun isTurnOffHallNotifications(): Boolean = cachedPrefs.pauseAll || cachedPrefs.turnOffHallNotifications
+    fun isTurnOffInboxNotifications(): Boolean = cachedPrefs.pauseAll || cachedPrefs.turnOffInboxNotifications
+    fun isPeerMuted(peer: String): Boolean = peer in cachedPrefs.mutedPeers
+    suspend fun setPauseAll(v: Boolean) {
+        cachedPrefs = cachedPrefs.copy(pauseAll = v)
+        ctx.prefs.edit { it[pauseAllKey] = v }
+    }
+    suspend fun setPeerMuted(peer: String, muted: Boolean) {
+        val next = if (muted) cachedPrefs.mutedPeers + peer else cachedPrefs.mutedPeers - peer
+        cachedPrefs = cachedPrefs.copy(mutedPeers = next)
+        ctx.prefs.edit { it[mutedKey] = next }
+    }
 
     suspend fun setTheme(t: ThemeMode) = ctx.prefs.edit { it[theme] = t.name }
     suspend fun setSounds(v: Boolean) = ctx.prefs.edit { it[sounds] = v }

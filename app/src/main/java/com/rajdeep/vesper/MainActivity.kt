@@ -1,5 +1,8 @@
 package com.rajdeep.vesper
 
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.outlined.Insights
@@ -130,6 +133,7 @@ import javax.inject.Inject
 @Serializable data class ChatInfoRoute(val peer: String)
 @Serializable data class ProfileRoute(val id: String)
 @Serializable data class MemberRoute(val id: String)
+@Serializable object ConsoleRoute
 
 /** Each tab has an outline icon (resting) and a filled one (selected) with the same meaning. */
 enum class Tab(val label: String, val icon: ImageVector, val outline: ImageVector, val space: Space) {
@@ -236,6 +240,19 @@ class MainActivity : ComponentActivity() {
             composable<ProfileRoute> { Page(this) {
                 ProfileScreen(onBack = { nav.popBackStack() }, onMessage = { id -> nav.navigate(DirectChatRoute(id)) })
             } }
+            composable<ConsoleRoute> { Page(this) {
+                // Same Console as before; only its entry point moved (You → Console, admin only).
+                CompositionLocalProvider(LocalSpace provides Space.CONSOLE) {
+                    androidx.compose.foundation.layout.Column(Modifier.fillMaxSize().background(V.c.bg)) {
+                        androidx.compose.foundation.layout.Row(Modifier.statusBarsPadding().padding(start = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            com.rajdeep.vesper.ui.components.IconAction(androidx.compose.material.icons.Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = V.c.text) { nav.popBackStack() }
+                        }
+                        androidx.compose.foundation.layout.Box(Modifier.weight(1f).consumeWindowInsets(androidx.compose.foundation.layout.WindowInsets.Companion.statusBars)) {
+                            ConsoleScreen(onMember = { nav.navigate(MemberRoute(it)) })
+                        }
+                    }
+                }
+            } }
             composable<MemberRoute> { Page(this) {
                 CompositionLocalProvider(LocalSpace provides Space.CONSOLE) { MemberScreen(onBack = { nav.popBackStack() }) }
             } }
@@ -247,14 +264,14 @@ class MainActivity : ComponentActivity() {
         // Tapping a person opens the private chat directly; tapping yourself goes to You.
         var tab by rememberSaveable { mutableStateOf(Tab.HALL) }
         val openPerson: (String) -> Unit = { id -> if (id == myId) tab = Tab.YOU else nav.navigate(DirectChatRoute(id)) { launchSingleTop = true } }
-        val tabs = Tab.entries.filter { it != Tab.CONSOLE || isAdmin }
+        val tabs = Tab.entries.filter { it != Tab.CONSOLE }
         val unread by messages.unreadDirect().collectAsState(0)
         val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
         androidx.activity.compose.BackHandler(enabled = tab != Tab.HALL) { tab = Tab.HALL }
         val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
         val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
         val hallListState = rememberLazyListState()
-        LaunchedEffect(isAdmin) { if (tab == Tab.CONSOLE && !isAdmin) tab = Tab.HALL }
+        LaunchedEffect(Unit) { if (tab == Tab.CONSOLE) tab = Tab.YOU }
         Column(Modifier.fillMaxSize().background(V.c.bg)) {
             // The bar never hides: the keyboard simply covers it. Content consumes the bar + nav-bar height, so the chat
             // composer's imePadding lifts it exactly to the keyboard top in one smooth motion (no up-then-down jump).
@@ -288,7 +305,7 @@ class MainActivity : ComponentActivity() {
                                     Tab.HALL -> ChatScreen(onBack = null, onOpenInfo = null, onOpenProfile = openPerson, listState = hallListState)
                                     Tab.DIRECT -> DirectListScreen(onOpen = { nav.navigate(DirectChatRoute(it)) }, onFindPeople = { tab = Tab.PEOPLE })
                                     Tab.PEOPLE -> PeopleScreen(onProfile = openPerson)
-                                    Tab.YOU -> YouScreen()
+                                    Tab.YOU -> YouScreen(onConsole = if (isAdmin) ({ nav.navigate(ConsoleRoute) { launchSingleTop = true } }) else null)
                                     Tab.CONSOLE -> ConsoleScreen(onMember = { nav.navigate(MemberRoute(it)) })
                                 }
                             }

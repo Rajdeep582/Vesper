@@ -1,5 +1,7 @@
 package com.rajdeep.vesper.ui.chat
 
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.ui.focus.focusRequester
 import kotlinx.coroutines.withTimeoutOrNull
 import com.rajdeep.vesper.ui.components.bubbleIn
 import com.rajdeep.vesper.ui.components.Reveal
@@ -181,6 +183,7 @@ fun MessageBubble(
     onLongPress: () -> Unit,
     onImage: (MediaRef) -> Unit,
     onRetry: () -> Unit,
+    highlighted: Boolean = false,
     selecting: Boolean = false,
     selected: Boolean = false,
     onToggle: () -> Unit = {},
@@ -196,7 +199,10 @@ fun MessageBubble(
     val fading = remaining != null && remaining < 3_600_000
     val bubbleAlpha by animateFloatAsState(if (fading) 0.82f else 1f, tween(Motion.L), label = "fade")
     val accent = V.accent
-    val bg = if (mine) accent.copy(alpha = if (V.c.dark) 0.16f else 0.14f) else V.c.s2
+    // 1–3 emoji and nothing else: shown large without a bubble (WhatsApp "jumbo" emoji / sticker look).
+    val jumbo = remember(m.text, m.kind) { m.kind == MessageKind.TEXT.name && m.replyRef == null && emojiOnlyCount(m.text) in 1..3 }
+    val bg = if (jumbo) androidx.compose.ui.graphics.Color.Transparent else if (mine) accent.copy(alpha = if (V.c.dark) 0.16f else 0.14f) else V.c.s2
+    val hl by animateFloatAsState(if (highlighted) 1f else 0f, tween(Motion.M), label = "hl")
     val big = 20.dp; val small = 6.dp
     val shape = if (mine) RoundedCornerShape(big, if (groupedWithPrev) small else big, if (groupedWithNext) small else small, big)
     else RoundedCornerShape(if (groupedWithPrev) small else big, big, big, if (groupedWithNext) small else small)
@@ -304,13 +310,14 @@ fun MessageBubble(
                         .clip(shape)
                         .background(bg)
                         .then(if (selected) Modifier.border(1.5.dp, V.accent.copy(alpha = 0.7f), shape) else Modifier)
+                        .then(if (hl > 0f) Modifier.background(V.accent.copy(alpha = 0.18f * hl)).border(1.5.dp, V.accent.copy(alpha = 0.8f * hl), shape) else Modifier)
                         .then(swipeDraggable)
                         .combinedClickable(remember { MutableInteractionSource() }, null, onLongClick = onLongPress, onClick = { if (selecting) onToggle() else if (m.state == MsgState.FAILED) onRetry() }),
                 ) {
                     // WhatsApp-style text layout: the time sits in the bottom-right corner — on the last line when it fits, else on its own line.
                     val textMeasurer = rememberTextMeasurer()
                     val q2 = V.c.text2; val s3 = V.c.s3
-                    val bodyStyle = V.t.body
+                    val bodyStyle = if (jumbo) V.t.body.copy(fontSize = (if (emojiOnlyCount(m.text) == 1) 52 else 40).sp, lineHeight = (if (emojiOnlyCount(m.text) == 1) 60 else 48).sp) else V.t.body
                     val metaStyle = V.t.mono.copy(fontSize = V.t.caption.fontSize)
                     val shown = remember(m.text, accent, q2) { if (kind == MessageKind.TEXT) com.rajdeep.vesper.ui.text.formatMessage(m.text ?: "", com.rajdeep.vesper.ui.theme.Mono, accent, q2, s3) else null }
                     val padH = 26.dp
@@ -701,8 +708,14 @@ fun Composer(
     getPreviewBytes: () -> ByteArray? = { null },
     getRecordedWaveform: () -> List<Int> = { emptyList() },
     onTyping: (Boolean) -> Unit = {},
+    draftKey: String? = null,
 ) {
-    var text by remember { mutableStateOf("") }
+    // Unsent text survives leaving the chat (kept in memory only, never written to disk).
+    var text by remember(draftKey) { mutableStateOf(draftKey?.let { Drafts.map[it] }.orEmpty()) }
+    LaunchedEffect(text, draftKey) { draftKey?.let { if (text.isBlank()) Drafts.map.remove(it) else Drafts.map[it] = text } }
+    var emojiOpen by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler(enabled = emojiOpen) { emojiOpen = false }
+    val kb = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val typingNow by androidx.compose.runtime.rememberUpdatedState(onTyping)
     // Each keystroke restarts this: "typing" while active, "stopped" after 4 s idle or when cleared/sent.
     LaunchedEffect(text) {
@@ -872,6 +885,7 @@ fun Composer(
                             ) { idle ->
                                 if (idle) {
                                     val focus = remember { MutableInteractionSource() }
+                                    val focusReq = remember { androidx.compose.ui.focus.FocusRequester() }
                                     val focused by focus.collectIsFocusedAsState()
                                     val ring by animateColorAsState(if (focused) accent.copy(alpha = 0.55f) else V.c.hairline, tween(Motion.M), label = "ring")
                                     Row(
@@ -879,17 +893,29 @@ fun Composer(
                                             .background(Brush.verticalGradient(listOf(V.c.s2, V.c.s1)))
                                             .border(1.dp, ring, RoundedCornerShape(25.dp))
                                             .animateContentSize(Motion.spring())
-                                            .padding(start = 4.dp, end = 14.dp),
+                                            .padding(start = 4.dp, end = 8.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
                                         IconAction(Icons.Rounded.Add, "Attach photo", tint = V.c.text2, size = 42.dp, onClick = onAttach)
+                                        LaunchedEffect(focused) { if (focused) emojiOpen = false }
                                         Box(Modifier.weight(1f).padding(vertical = 13.dp)) {
                                             if (text.isEmpty()) Text(placeholder, style = V.t.body, color = V.c.text3)
                                             BasicTextField(
                                                 text, { if (it.length <= Limits.MAX_TEXT_CHARS * 3) text = it },
                                                 textStyle = V.t.body.copy(color = V.c.text), cursorBrush = SolidColor(accent), maxLines = 6,
                                                 interactionSource = focus,
-                                                modifier = Modifier.fillMaxWidth(),
+                                                modifier = Modifier.fillMaxWidth().focusRequester(focusReq),
+                                            )
+                                        }
+                                        // Emoji ↔ keyboard toggle, morphing icon.
+                                        androidx.compose.animation.Crossfade(emojiOpen, animationSpec = androidx.compose.animation.core.tween(Motion.S), label = "emo") { open ->
+                                            Text(
+                                                if (open) "⌨️" else "🙂", fontSize = 20.sp,
+                                                modifier = Modifier.padding(start = 6.dp).clip(CircleShape).pressable(scaleTo = 0.85f) {
+                                                    fb.tick()
+                                                    if (emojiOpen) { emojiOpen = false; focusReq.requestFocus(); kb?.show() }
+                                                    else { kb?.hide(); emojiOpen = true }
+                                                }.padding(4.dp).graphicsLayer { alpha = if (open) 0.9f else 0.75f },
                                             )
                                         }
                                     }
@@ -1209,6 +1235,24 @@ fun Composer(
                 }
             }
         }
+        // In-app emoji & sticker drawer (slides up in place of the keyboard).
+        com.rajdeep.vesper.ui.components.Reveal(
+            emojiOpen && rec == RecordUi.Idle,
+            enter = androidx.compose.animation.expandVertically(Motion.spring(), expandFrom = Alignment.Top) + fadeIn(tween(Motion.M)),
+            exit = androidx.compose.animation.shrinkVertically(tween(Motion.S)) + fadeOut(tween(Motion.XS)),
+        ) {
+            EmojiPanel(
+                onEmoji = { text += it },
+                onSticker = { fb.send(); onSend(it) },
+                onBackspace = {
+                    if (text.isNotEmpty()) {
+                        val bi = java.text.BreakIterator.getCharacterInstance(); bi.setText(text)
+                        text = text.substring(0, bi.preceding(text.length).coerceAtLeast(0))
+                    }
+                },
+                modifier = Modifier.padding(top = 6.dp).navigationBarsPadding(),
+            )
+        }
     }
 }
 
@@ -1506,3 +1550,7 @@ fun LiveBars(level: Float, color: Color, modifier: Modifier = Modifier) {
         }
     }
 }
+
+
+/** Per-chat unsent drafts for this app session (RAM only). */
+object Drafts { val map = java.util.concurrent.ConcurrentHashMap<String, String>() }

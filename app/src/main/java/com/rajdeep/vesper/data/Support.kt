@@ -78,7 +78,7 @@ class Notifier @Inject constructor(
 
     fun direct(peer: String, name: String, kind: MessageKind, text: String?, mid: String, expiresAt: Long) {
         if (isViewing(peer)) return
-        if (settings.isTurnOffInboxNotifications()) return
+        if (settings.isTurnOffInboxNotifications() || settings.isPeerMuted(peer)) return
         if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val preview = when (kind) { MessageKind.TEXT -> text?.take(120) ?: ""; MessageKind.VOICE -> "Voice message"; MessageKind.IMAGE -> "Photo" }
         val intent = PendingIntent.getActivity(
@@ -138,12 +138,9 @@ class Notifier @Inject constructor(
     }
 
     fun cancelDirectAll() {
-        val nm = NotificationManagerCompat.from(ctx)
-        byMessage.entries.forEach { entry ->
-            if (entry.value.first != 7002) {
-                nm.cancel(entry.value.first)
-            }
-        }
+        // Also clears notifications posted by an earlier process (byMessage only knows this one's).
+        val sys = ctx.getSystemService(NotificationManager::class.java)
+        runCatching { sys.activeNotifications.filter { it.notification.channelId == CHANNEL_DIRECT }.forEach { sys.cancel(it.id) } }
         byMessage.entries.removeIf { it.value.first != 7002 }
     }
 
