@@ -1,5 +1,7 @@
 package com.rajdeep.vesper.ui.components
 
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -45,6 +47,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.rajdeep.vesper.ui.theme.Motion
 import com.rajdeep.vesper.ui.theme.V
 import kotlin.math.cos
@@ -151,4 +154,97 @@ fun greeting(): String = when (java.util.Calendar.getInstance().get(java.util.Ca
     in 12..16 -> "Good afternoon"
     in 17..21 -> "Good evening"
     else -> "Up late"
+}
+
+/** You-tab hero: aurora backdrop, living ring avatar with an orbiting spark, badges and count-up stats. */
+@Composable
+fun ProfileHero(
+    name: String,
+    isAdmin: Boolean,
+    joinedLabel: String,
+    days: Int,
+    chats: Int,
+    devices: Int,
+    online: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val accent = if (isAdmin) V.c.console else V.accent
+    val second = V.c.direct
+    val t = rememberInfiniteTransition(label = "hero")
+    val spin by t.animateFloat(0f, 360f, infiniteRepeatable(tween(9_000, easing = LinearEasing)), label = "spin")
+    val orbit by t.animateFloat(0f, (2 * Math.PI).toFloat(), infiniteRepeatable(tween(4_200, easing = LinearEasing)), label = "orbit")
+    val breathe by t.animateFloat(0.55f, 1f, infiniteRepeatable(tween(2_400), RepeatMode.Reverse), label = "breathe")
+    // Entrance: avatar pops, then text and stats rise in.
+    val enter = androidx.compose.runtime.remember { androidx.compose.animation.core.Animatable(0f) }
+    androidx.compose.runtime.LaunchedEffect(Unit) { enter.animateTo(1f, androidx.compose.animation.core.spring(dampingRatio = 0.62f, stiffness = 180f)) }
+    Box(modifier.fillMaxWidth()) {
+        Aurora(accent, second, Modifier.matchParentSize(), intensity = 1.6f)
+        Column(Modifier.fillMaxWidth().padding(top = 30.dp, bottom = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(Modifier.size(168.dp).graphicsLayer { val k = 0.7f + 0.3f * enter.value; scaleX = k; scaleY = k; alpha = enter.value.coerceIn(0f, 1f) }, contentAlignment = Alignment.Center) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val c = center; val r = size.minDimension / 2
+                    // soft halo
+                    drawCircle(Brush.radialGradient(listOf(accent.copy(alpha = 0.32f * breathe), Color.Transparent), c, r), r, c)
+                    // conic ring
+                    rotate(spin) {
+                        drawCircle(
+                            Brush.sweepGradient(listOf(accent, second, V_SUCCESS, accent.copy(alpha = 0.2f), accent)),
+                            radius = r * 0.70f, style = Stroke(3.5.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round),
+                        )
+                    }
+                    // thin outer track with dashes
+                    drawCircle(accent.copy(alpha = 0.18f), radius = r * 0.82f, style = Stroke(1.dp.toPx(), pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 7.dp.toPx()))))
+                    // orbiting spark
+                    val spark = Offset(c.x + r * 0.82f * cos(orbit), c.y + r * 0.82f * sin(orbit))
+                    drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.9f), accent.copy(alpha = 0.0f)), spark, 9.dp.toPx()), 9.dp.toPx(), spark)
+                    drawCircle(Color.White, 2.2.dp.toPx(), spark)
+                }
+                Monogram(name.ifEmpty { "?" }, 104.dp)
+                if (online) Box(
+                    Modifier.align(Alignment.BottomEnd).offset((-30).dp, (-30).dp).size(22.dp).clip(CircleShape).background(V.c.bg).padding(3.dp)
+                        .clip(CircleShape).background(V_SUCCESS).graphicsLayer { alpha = 0.6f + 0.4f * breathe },
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Column(
+                Modifier.graphicsLayer { alpha = enter.value.coerceIn(0f, 1f); translationY = (1f - enter.value) * 24.dp.toPx() },
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(name, style = V.t.display.copy(fontSize = 32.sp, lineHeight = 36.sp), color = V.c.text)
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (isAdmin) Row(
+                        Modifier.clip(RoundedCornerShape(12.dp)).background(Brush.horizontalGradient(listOf(accent, second))).padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("★", style = V.t.caption, color = Color.White)
+                        Spacer(Modifier.width(5.dp))
+                        Text("Administrator", style = V.t.caption, color = Color.White)
+                    }
+                    StatChip("Since $joinedLabel", accent)
+                    StatChip(if (online) "Online" else "Offline", if (online) V_SUCCESS else V.c.text3, pulse = online)
+                }
+                Spacer(Modifier.height(18.dp))
+                Row(
+                    Modifier.padding(horizontal = 16.dp).fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(V.c.s1.copy(alpha = 0.72f))
+                        .border(1.dp, V.c.hairline, RoundedCornerShape(22.dp)).padding(vertical = 14.dp),
+                ) {
+                    HeroStat(days, if (days == 1) "day here" else "days here", accent, Modifier.weight(1f))
+                    Box(Modifier.width(1.dp).height(38.dp).background(V.c.hairline).align(Alignment.CenterVertically))
+                    HeroStat(chats, if (chats == 1) "chat" else "chats", second, Modifier.weight(1f))
+                    Box(Modifier.width(1.dp).height(38.dp).background(V.c.hairline).align(Alignment.CenterVertically))
+                    HeroStat(devices, if (devices == 1) "device" else "devices", V_SUCCESS, Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeroStat(value: Int, label: String, tint: Color, modifier: Modifier = Modifier) {
+    val shown by androidx.compose.animation.core.animateIntAsState(value, tween(1100, easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "count")
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(shown.toString(), style = V.t.title.copy(fontSize = 24.sp), color = tint)
+        Text(label, style = V.t.caption, color = V.c.text2)
+    }
 }

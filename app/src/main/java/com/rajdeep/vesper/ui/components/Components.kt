@@ -464,20 +464,22 @@ fun Modifier.springOverscroll(): Modifier {
                 return androidx.compose.ui.geometry.Offset.Zero
             }
             override suspend fun onPreFling(available: androidx.compose.ui.unit.Velocity): androidx.compose.ui.unit.Velocity {
-                if (offset.value != 0f) {
-                    offset.animateTo(0f, androidx.compose.animation.core.spring(dampingRatio = 0.62f, stiffness = 260f))
-                    return available
-                }
-                return androidx.compose.ui.unit.Velocity.Zero
+                val o = offset.value
+                if (kotlin.math.abs(o) < 0.5f) return androidx.compose.ui.unit.Velocity.Zero
+                // Release the stretch without blocking: the spring runs on its own while the list keeps its momentum.
+                scope.launch { offset.animateTo(0f, androidx.compose.animation.core.spring(dampingRatio = 0.62f, stiffness = 260f), initialVelocity = available.y * 0.15f) }
+                // Fling away from the edge → hand the velocity to the list (this used to be swallowed: the "sticky" stop).
+                return if (kotlin.math.sign(available.y) == kotlin.math.sign(o)) available else androidx.compose.ui.unit.Velocity.Zero
             }
             override suspend fun onPostFling(consumed: androidx.compose.ui.unit.Velocity, available: androidx.compose.ui.unit.Velocity): androidx.compose.ui.unit.Velocity {
                 if (kotlin.math.abs(available.y) > 50f) {
-                    // Fling hit an edge: overshoot proportional to leftover velocity, then settle.
-                    offset.animateTo(0f, androidx.compose.animation.core.spring(dampingRatio = 0.5f, stiffness = 220f), initialVelocity = available.y * 0.35f)
-                } else if (offset.value != 0f) {
-                    offset.animateTo(0f, androidx.compose.animation.core.spring(dampingRatio = 0.62f, stiffness = 260f))
+                    // Fling hit an edge: overshoot proportional to leftover velocity, then settle (non-blocking).
+                    scope.launch { offset.animateTo(0f, androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 240f), initialVelocity = (available.y * 0.3f).coerceIn(-6000f, 6000f)) }
+                    return available
+                } else if (kotlin.math.abs(offset.value) >= 0.5f && !offset.isRunning) {
+                    scope.launch { offset.animateTo(0f, androidx.compose.animation.core.spring(dampingRatio = 0.62f, stiffness = 260f)) }
                 }
-                return available
+                return androidx.compose.ui.unit.Velocity.Zero
             }
         }
     }

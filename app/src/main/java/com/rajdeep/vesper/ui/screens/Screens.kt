@@ -1,5 +1,6 @@
 package com.rajdeep.vesper.ui.screens
 
+import kotlinx.coroutines.flow.map
 import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.Insights
 import com.rajdeep.vesper.ui.components.springOverscroll
@@ -505,7 +506,11 @@ class YouViewModel @Inject constructor(
     private val settings: Settings,
     private val session: SessionManager,
     private val notifier: Notifier,
+    messages: Messages,
+    rt: com.rajdeep.vesper.core.net.Realtime,
 ) : ViewModel() {
+    val chats = messages.directList().map { l -> l.count { it.peerName != "Notes to self" } }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+    val online = rt.link.map { it == com.rajdeep.vesper.core.net.Link.ONLINE }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
     val prefs = settings.prefs.stateIn(viewModelScope, SharingStarted.Eagerly, Prefs())
     val me get() = session.current()
     val devices = MutableStateFlow<List<AdminDevice>>(emptyList())
@@ -564,16 +569,17 @@ fun YouScreen(onConsole: (() -> Unit)? = null, vm: YouViewModel = hiltViewModel(
     LaunchedEffect(msg) { if (msg != null) { delay(3500); vm.message.value = null } }
     Box(Modifier.fillMaxSize().background(V.c.bg)) {
         Column(Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState())) {
-            Column(Modifier.fillMaxWidth().padding(top = 36.dp, bottom = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Monogram(me?.username ?: "", 96.dp, ring = if (me?.isAdmin == true) V.c.console else V.c.hairline)
-                Spacer(Modifier.height(14.dp))
-                Text(me?.username ?: "", style = V.t.name, color = V.c.text)
-                Text(
-                    (if (me?.isAdmin == true) "Administrator · " else "") + "Member since " + joined(me?.joinedAt ?: 0),
-                    style = V.t.label, color = if (me?.isAdmin == true) V.c.console else V.c.text2,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.padding(top = 4.dp, start = 24.dp, end = 24.dp),
-                )
-            }
+            val chats by vm.chats.collectAsState()
+            val online by vm.online.collectAsState()
+            com.rajdeep.vesper.ui.components.ProfileHero(
+                name = me?.username ?: "",
+                isAdmin = me?.isAdmin == true,
+                joinedLabel = joined(me?.joinedAt ?: 0),
+                days = (((System.currentTimeMillis() - (me?.joinedAt ?: System.currentTimeMillis())) / 86_400_000L) + 1).toInt().coerceAtLeast(1),
+                chats = chats,
+                devices = devices.size.coerceAtLeast(1),
+                online = online,
+            )
             SectionLabel("Appearance")
             Group {
                 Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
