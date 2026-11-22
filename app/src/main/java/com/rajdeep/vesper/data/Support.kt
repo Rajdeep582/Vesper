@@ -64,6 +64,14 @@ class Notifier @Inject constructor(
             },
         )
         nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_MENTION, "Mentions", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "When someone @mentions you or @all in the Hall"
+                enableVibration(true)
+                enableLights(true)
+                setShowBadge(true)
+            },
+        )
+        nm.createNotificationChannel(
             NotificationChannel(CHANNEL_HALL, "Hall", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Public Hall messages"
                 enableVibration(true)
@@ -104,8 +112,9 @@ class Notifier @Inject constructor(
         byMessage[mid] = id to expiresAt
     }
 
-    fun hall(name: String, kind: MessageKind, text: String?, id: String, expiresAt: Long) {
+    fun hall(name: String, kind: MessageKind, text: String?, id: String, expiresAt: Long, mention: Boolean = false, everyone: Boolean = false) {
         if (isViewingHall()) return
+        if (mention) { mention(name, text, id, expiresAt, everyone); return }
         if (settings.isTurnOffHallNotifications()) return
         if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val preview = when (kind) { MessageKind.TEXT -> text?.take(120) ?: ""; MessageKind.VOICE -> "Voice message"; MessageKind.IMAGE -> "Photo"; MessageKind.FILE -> "📎 File" }
@@ -131,17 +140,48 @@ class Notifier @Inject constructor(
         byMessage[id] = notifId to expiresAt
     }
 
+    /** @mention / @all: own channel, one notification per message, and it ignores every mute (like WhatsApp). */
+    private fun mention(name: String, text: String?, id: String, expiresAt: Long, everyone: Boolean) {
+        if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        val intent = PendingIntent.getActivity(
+            ctx, 7003,
+            Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val notifId = MENTION_BASE + (id.hashCode() and 0xFFFF)
+        val title = if (everyone) "$name @all in the Hall" else "$name mentioned you in the Hall"
+        val body = text?.take(300) ?: "Replied to your message"
+        val n = NotificationCompat.Builder(ctx, CHANNEL_MENTION)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setColor(0xFFD4A853.toInt())
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setAutoCancel(true)
+            .setGroup("mentions")
+            .setTimeoutAfter((expiresAt - System.currentTimeMillis()).coerceAtLeast(1000))
+            .setContentIntent(intent)
+            .build()
+        NotificationManagerCompat.from(ctx).notify(notifId, n)
+        byMessage[id] = notifId to expiresAt
+    }
+
     fun cancelFor(peer: String) = NotificationManagerCompat.from(ctx).cancel(peer.hashCode())
     fun cancelHall() {
         NotificationManagerCompat.from(ctx).cancel(7002)
-        byMessage.entries.removeIf { it.value.first == 7002 }
+        val sys = ctx.getSystemService(NotificationManager::class.java)
+        runCatching { sys.activeNotifications.filter { it.notification.channelId == CHANNEL_MENTION }.forEach { sys.cancel(it.id) } }
+        byMessage.entries.removeIf { it.value.first == 7002 || it.value.first >= MENTION_BASE }
     }
 
     fun cancelDirectAll() {
         // Also clears notifications posted by an earlier process (byMessage only knows this one's).
         val sys = ctx.getSystemService(NotificationManager::class.java)
         runCatching { sys.activeNotifications.filter { it.notification.channelId == CHANNEL_DIRECT }.forEach { sys.cancel(it.id) } }
-        byMessage.entries.removeIf { it.value.first != 7002 }
+        byMessage.entries.removeIf { it.value.first != 7002 && it.value.first < MENTION_BASE }
     }
 
     fun cancelExpired(mids: Collection<String>) {
@@ -153,6 +193,8 @@ class Notifier @Inject constructor(
     companion object {
         const val CHANNEL_DIRECT = "vesper_direct"
         const val CHANNEL_HALL = "vesper_hall"
+        const val CHANNEL_MENTION = "vesper_mention"
+        const val MENTION_BASE = 0x7100000
     }
 }
 

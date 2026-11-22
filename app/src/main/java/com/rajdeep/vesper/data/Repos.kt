@@ -125,6 +125,7 @@ class PeopleRepository @Inject constructor(private val api: Api, private val db:
     }
 
     fun observe(id: String) = db.users().observe(id)
+    fun everyone() = db.users().all()
 }
 
 @Singleton

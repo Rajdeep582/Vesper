@@ -596,7 +596,9 @@ class Messages @Inject constructor(
         )
         if (inserted != -1L && m.senderId != s.userId && !quiet) {
             if (live) _events.tryEmit(ChatEvent.Incoming(Scope.HALL, null))
-            notifier.hall(m.senderName, m.kind, m.body.text, m.id, m.expiresAt)
+            // @username / @all, or a reply to one of my messages: always ping, even with Hall notifications off.
+            val calledMe = (m.kind == MessageKind.TEXT && Mentions.hits(m.body.text, s.username)) || m.body.reply?.senderName.equals(s.username, ignoreCase = true)
+            notifier.hall(m.senderName, m.kind, m.body.text, m.id, m.expiresAt, mention = calledMe, everyone = calledMe && Mentions.everyone(m.body.text) && !Mentions.names(m.body.text).contains(s.username.lowercase()))
         }
     }
 

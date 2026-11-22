@@ -205,6 +205,10 @@ class ChatViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val peerOnline: StateFlow<Boolean> = messages.onlineUsers.map { peer != null && peer != myId && peer in it }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
     fun typing(on: Boolean) = messages.typing(peer, on)
+    /** Hall: every member's username for the @ picker (refreshed from the server once per visit). */
+    val mentionables: StateFlow<List<String>> = (if (peer == null) people.everyone().map { l -> l.filter { it.id != session.current()?.userId && it.username.isNotBlank() }.map { it.username }.sortedBy { it.lowercase() } }
+        else kotlinx.coroutines.flow.flowOf(emptyList())).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    init { if (peer == null) viewModelScope.launch { runCatching { people.search("") } } }
     val pins: StateFlow<List<MessageEntity>> = messages.pins(peer).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     fun pin(m: MessageEntity, days: Int) = viewModelScope.launch {
         runCatching { messages.pin(m, days) }
@@ -400,6 +404,7 @@ fun ChatScreen(
     LaunchedEffect(items) { val ids = items.map { it.localId }.toSet(); selected.retainAll { it in ids } }
     var viewer by remember { mutableStateOf<MediaRef?>(null) }
     val pinRows by vm.pins.collectAsState()
+    val mentionables by vm.mentionables.collectAsState()
     val activePins = remember(pinRows, now) { pinRows.filter { (it.pinnedUntil ?: 0) > now } }
     var pinAsk by remember { mutableStateOf<MessageEntity?>(null) }
     var pinMenu by remember { mutableStateOf<MessageEntity?>(null) }
@@ -603,6 +608,7 @@ fun ChatScreen(
                                 onImage = { if (selecting) toggle(m) else viewer = it },
                                 onRetry = { vm.retry(m.localId) },
                                 highlighted = m.localId == hitId || m.localId == flashId,
+                                me = vm.myName,
                                 selecting = selecting,
                                 selected = m.localId in selected,
                                 onToggle = { toggle(m) },
@@ -730,6 +736,7 @@ fun ChatScreen(
                                 onAttach = { attachFocus.clearFocus(); attachKb?.hide(); fb.tick(); attachOpen = !attachOpen },
                                 onTyping = { vm.typing(it) },
                                 draftKey = vm.peer ?: "hall",
+                                mentionables = mentionables,
                                 onRecordStart = {
                                     if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                                         if (!pendingRecord) { pendingRecord = true; micPermission.launch(Manifest.permission.RECORD_AUDIO) }

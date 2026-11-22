@@ -29,7 +29,20 @@ object MessageText {
  * Markers must hug the text (no inner leading/trailing space) and sit at word boundaries, like WhatsApp.
  * URLs become tappable links.
  */
-fun formatMessage(raw: String, mono: FontFamily, accent: Color, quoteColor: Color, spoilerBg: Color): AnnotatedString {
+fun formatMessage(raw: String, mono: FontFamily, accent: Color, quoteColor: Color, spoilerBg: Color, mention: Color? = null, me: String? = null): AnnotatedString {
+    val built = formatBody(raw, mono, accent, quoteColor, spoilerBg)
+    if (mention == null || '@' !in built.text) return built
+    // @mentions: gold and semibold; a mention of me (or @all) also gets a soft highlight.
+    return AnnotatedString.Builder(built).apply {
+        com.rajdeep.vesper.data.Mentions.RX.findAll(built.text).forEach { m ->
+            val n = m.groupValues[1].lowercase()
+            val mine = n in com.rajdeep.vesper.data.Mentions.EVERYONE || (me != null && n == me.lowercase())
+            addStyle(SpanStyle(color = mention, fontWeight = FontWeight.SemiBold, background = if (mine) mention.copy(alpha = 0.18f) else Color.Unspecified), m.range.first, m.range.last + 1)
+        }
+    }.toAnnotatedString()
+}
+
+private fun formatBody(raw: String, mono: FontFamily, accent: Color, quoteColor: Color, spoilerBg: Color): AnnotatedString {
     val text = MessageText.visible(raw).trimEnd()
     return buildAnnotatedString {
         val lines = text.split('\n')

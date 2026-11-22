@@ -1,6 +1,7 @@
 package com.rajdeep.vesper.ui.chat
 
 import androidx.compose.material.icons.rounded.AttachFile
+import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Download
@@ -196,6 +197,7 @@ fun MessageBubble(
     onToggle: () -> Unit = {},
     onReply: ((MessageEntity) -> Unit)? = null,
     onJumpToMessage: ((String) -> Unit)? = null,
+    me: String? = null,
 ) {
     if (m.state == MsgState.SYSTEM) { SystemLine(m.text ?: ""); return }
     val mine = m.outgoing
@@ -326,7 +328,13 @@ fun MessageBubble(
                     val q2 = V.c.text2; val s3 = V.c.s3
                     val bodyStyle = if (jumbo) V.t.body.copy(fontSize = (if (emojiOnlyCount(m.text) == 1) 52 else 40).sp, lineHeight = (if (emojiOnlyCount(m.text) == 1) 60 else 48).sp) else V.t.body
                     val metaStyle = V.t.mono.copy(fontSize = V.t.caption.fontSize)
-                    val shown = remember(m.text, accent, q2) { if (kind == MessageKind.TEXT) com.rajdeep.vesper.ui.text.formatMessage(m.text ?: "", com.rajdeep.vesper.ui.theme.Mono, accent, q2, s3) else null }
+                    val mentionColor = V.c.hall
+                    val shown = remember(m.text, accent, q2, me) {
+                        if (kind == MessageKind.TEXT) com.rajdeep.vesper.ui.text.formatMessage(
+                            m.text ?: "", com.rajdeep.vesper.ui.theme.Mono, accent, q2, s3,
+                            mention = if (m.scope == Scope.HALL) mentionColor else null, me = me,
+                        ) else null
+                    }
                     val padH = 26.dp
                     val textPlan = remember(shown, maxW, bodyStyle, m.outgoing, m.acceptedAt, m.createdAt, m.replyRef != null, density) {
                         if (shown == null) null else with(density) {
@@ -708,6 +716,8 @@ sealed interface RecordUi {
     data object Paused : RecordUi
 }
 
+private val MENTION_QUERY = Regex("""(?:^|\s)@([A-Za-z0-9_.]{0,20})$""")
+
 @Composable
 fun Composer(
     enabled: Boolean,
@@ -725,6 +735,8 @@ fun Composer(
     getRecordedWaveform: () -> List<Int> = { emptyList() },
     onTyping: (Boolean) -> Unit = {},
     draftKey: String? = null,
+    /** Hall only: usernames offered after typing "@" (plus @all). Empty = no mention picker. */
+    mentionables: List<String> = emptyList(),
 ) {
     // Unsent text survives leaving the chat (kept in memory only, never written to disk).
     var text by remember(draftKey) { mutableStateOf(draftKey?.let { Drafts.map[it] }.orEmpty()) }
@@ -776,6 +788,26 @@ fun Composer(
         return
     }
 
+    // Text + cursor for the field; external changes (draft restore, emoji, mention pick) put the cursor at the end
+    // unless they set it themselves.
+    var tfv by remember(draftKey) { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(text, androidx.compose.ui.text.TextRange(text.length))) }
+    if (tfv.text != text) tfv = androidx.compose.ui.text.input.TextFieldValue(text, androidx.compose.ui.text.TextRange(text.length))
+    val beforeCursor = tfv.text.substring(0, tfv.selection.end.coerceIn(0, tfv.text.length))
+    val mentionMatch = if (draftKey != "hall") null else MENTION_QUERY.find(beforeCursor)
+    val mentionQ = mentionMatch?.groupValues?.get(1)
+    val mentionHits = mentionQ?.let { q ->
+        (listOf("all") + mentionables).filter { it.startsWith(q, ignoreCase = true) && !it.equals(q, ignoreCase = true) || (q.isEmpty() && it == "all") }.distinct().take(6)
+    }.orEmpty()
+    fun pickMention(name: String) {
+        val m = mentionMatch ?: return
+        val at = m.range.first + m.value.indexOf('@')
+        val end = tfv.selection.end
+        val ins = "@$name "
+        val nt = tfv.text.substring(0, at) + ins + tfv.text.substring(end)
+        tfv = androidx.compose.ui.text.input.TextFieldValue(nt, androidx.compose.ui.text.TextRange(at + ins.length))
+        text = nt
+    }
+
     val cmdQuery = text.takeIf { it.startsWith("/") && !it.contains(' ') && !it.contains('\n') }
     val matches = cmdQuery?.let { q -> com.rajdeep.vesper.ui.text.SLASH_COMMANDS.filter { it.name.startsWith(q, ignoreCase = true) } }.orEmpty()
 
@@ -798,6 +830,39 @@ fun Composer(
                         if (c.args.isNotEmpty()) Text("  " + c.args, style = V.t.mono.copy(fontSize = V.t.label.fontSize), color = V.c.text3)
                         Spacer(Modifier.width(12.dp))
                         Text(c.summary, style = V.t.label, color = V.c.text2, maxLines = 1, modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+
+        com.rajdeep.vesper.ui.components.Reveal(
+            mentionHits.isNotEmpty(),
+            enter = fadeIn(tween(Motion.S)) + androidx.compose.animation.expandVertically(Motion.spring()),
+            exit = fadeOut(tween(Motion.XS)) + androidx.compose.animation.shrinkVertically(tween(Motion.S)),
+        ) {
+            val gold = V.c.hall
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 6.dp).clip(RoundedCornerShape(20.dp))
+                    .background(V.c.s2).border(1.dp, gold.copy(alpha = 0.28f), RoundedCornerShape(20.dp)).padding(vertical = 6.dp),
+            ) {
+                mentionHits.forEach { n ->
+                    val all = n == "all"
+                    Row(
+                        Modifier.fillMaxWidth().pressable(scaleTo = 0.98f) { fb.tick(); pickMention(n) }.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier.size(32.dp).clip(CircleShape).background(if (all) Brush.linearGradient(listOf(gold, gold.copy(alpha = 0.55f))) else Brush.linearGradient(listOf(gold.copy(alpha = 0.22f), gold.copy(alpha = 0.10f)))),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (all) Icon(Icons.Rounded.Groups, null, tint = V.c.bg, modifier = Modifier.size(18.dp))
+                            else Text(n.first().uppercase(), style = V.t.label.copy(fontWeight = FontWeight.SemiBold), color = gold)
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("@$n", style = V.t.bodySmall.copy(fontWeight = FontWeight.SemiBold), color = V.c.text, maxLines = 1)
+                            if (all) Text("Notify everyone in the Hall", style = V.t.caption, color = V.c.text2, maxLines = 1)
+                        }
                     }
                 }
             }
@@ -917,7 +982,7 @@ fun Composer(
                                         Box(Modifier.weight(1f).padding(vertical = 13.dp)) {
                                             if (text.isEmpty()) Text(placeholder, style = V.t.body, color = V.c.text3)
                                             BasicTextField(
-                                                text, { if (it.length <= Limits.MAX_TEXT_CHARS * 3) text = it },
+                                                tfv, { if (it.text.length <= Limits.MAX_TEXT_CHARS * 3) { tfv = it; text = it.text } },
                                                 textStyle = V.t.body.copy(color = V.c.text), cursorBrush = SolidColor(accent), maxLines = 6,
                                                 interactionSource = focus,
                                                 modifier = Modifier.fillMaxWidth().focusRequester(focusReq),
