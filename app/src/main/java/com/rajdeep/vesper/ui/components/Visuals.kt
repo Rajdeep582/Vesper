@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -42,6 +43,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
@@ -156,95 +158,114 @@ fun greeting(): String = when (java.util.Calendar.getInstance().get(java.util.Ca
     else -> "Up late"
 }
 
-/** You-tab hero: aurora backdrop, living ring avatar with an orbiting spark, badges and count-up stats. */
+/**
+ * You-tab hero in the Hall's gold: a glossy 3D orb (radial light, specular highlight, rim glow, soft floor shadow)
+ * floating gently, circled by two tilted orbits of gold particles that pass in front of and behind it.
+ */
 @Composable
-fun ProfileHero(
-    name: String,
-    isAdmin: Boolean,
-    joinedLabel: String,
-    days: Int,
-    chats: Int,
-    devices: Int,
-    online: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    val accent = if (isAdmin) V.c.console else V.accent
-    val second = V.c.direct
+fun ProfileHero(name: String, isAdmin: Boolean, joinedLabel: String, modifier: Modifier = Modifier) {
+    val gold = V.c.hall
+    val goldLight = androidx.compose.ui.graphics.lerp(gold, Color.White, 0.55f)
+    val goldDeep = androidx.compose.ui.graphics.lerp(gold, Color.Black, 0.55f)
     val t = rememberInfiniteTransition(label = "hero")
-    val spin by t.animateFloat(0f, 360f, infiniteRepeatable(tween(9_000, easing = LinearEasing)), label = "spin")
-    val orbit by t.animateFloat(0f, (2 * Math.PI).toFloat(), infiniteRepeatable(tween(4_200, easing = LinearEasing)), label = "orbit")
-    val breathe by t.animateFloat(0.55f, 1f, infiniteRepeatable(tween(2_400), RepeatMode.Reverse), label = "breathe")
-    // Entrance: avatar pops, then text and stats rise in.
+    val a by t.animateFloat(0f, (2 * Math.PI).toFloat(), infiniteRepeatable(tween(7_000, easing = LinearEasing)), label = "a")
+    val b by t.animateFloat(0f, (2 * Math.PI).toFloat(), infiniteRepeatable(tween(11_000, easing = LinearEasing)), label = "b")
+    val float by t.animateFloat(-1f, 1f, infiniteRepeatable(tween(3_200, easing = androidx.compose.animation.core.FastOutSlowInEasing), RepeatMode.Reverse), label = "float")
+    val glow by t.animateFloat(0.55f, 1f, infiniteRepeatable(tween(2_600), RepeatMode.Reverse), label = "glow")
+    val sheen by t.animateFloat(-0.35f, 0.35f, infiniteRepeatable(tween(5_000, easing = androidx.compose.animation.core.FastOutSlowInEasing), RepeatMode.Reverse), label = "sheen")
     val enter = androidx.compose.runtime.remember { androidx.compose.animation.core.Animatable(0f) }
-    androidx.compose.runtime.LaunchedEffect(Unit) { enter.animateTo(1f, androidx.compose.animation.core.spring(dampingRatio = 0.62f, stiffness = 180f)) }
+    androidx.compose.runtime.LaunchedEffect(Unit) { enter.animateTo(1f, androidx.compose.animation.core.spring(dampingRatio = 0.6f, stiffness = 160f)) }
+    val letter = name.firstOrNull()?.uppercaseChar()?.toString() ?: "?"
+    val letterStyle = V.t.display.copy(fontSize = 64.sp, lineHeight = 64.sp)
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val letterLayout = androidx.compose.runtime.remember(letter) { measurer.measure(letter, letterStyle.copy(color = goldDeep)) }
+
     Box(modifier.fillMaxWidth()) {
-        Aurora(accent, second, Modifier.matchParentSize(), intensity = 1.6f)
-        Column(Modifier.fillMaxWidth().padding(top = 30.dp, bottom = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(Modifier.size(168.dp).graphicsLayer { val k = 0.7f + 0.3f * enter.value; scaleX = k; scaleY = k; alpha = enter.value.coerceIn(0f, 1f) }, contentAlignment = Alignment.Center) {
-                Canvas(Modifier.fillMaxSize()) {
-                    val c = center; val r = size.minDimension / 2
-                    // soft halo
-                    drawCircle(Brush.radialGradient(listOf(accent.copy(alpha = 0.32f * breathe), Color.Transparent), c, r), r, c)
-                    // conic ring
-                    rotate(spin) {
-                        drawCircle(
-                            Brush.sweepGradient(listOf(accent, second, V_SUCCESS, accent.copy(alpha = 0.2f), accent)),
-                            radius = r * 0.70f, style = Stroke(3.5.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round),
-                        )
-                    }
-                    // thin outer track with dashes
-                    drawCircle(accent.copy(alpha = 0.18f), radius = r * 0.82f, style = Stroke(1.dp.toPx(), pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 7.dp.toPx()))))
-                    // orbiting spark
-                    val spark = Offset(c.x + r * 0.82f * cos(orbit), c.y + r * 0.82f * sin(orbit))
-                    drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.9f), accent.copy(alpha = 0.0f)), spark, 9.dp.toPx()), 9.dp.toPx(), spark)
-                    drawCircle(Color.White, 2.2.dp.toPx(), spark)
+        Aurora(gold, goldLight, Modifier.matchParentSize(), intensity = 1.4f)
+        Column(Modifier.fillMaxWidth().statusBarsPadding().padding(top = 16.dp, bottom = 18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Canvas(
+                Modifier.size(240.dp, 200.dp).graphicsLayer {
+                    val k = 0.75f + 0.25f * enter.value; scaleX = k; scaleY = k; alpha = enter.value.coerceIn(0f, 1f)
+                },
+            ) {
+                val cx = size.width / 2
+                val bob = float * 5.dp.toPx()
+                val cy = size.height * 0.45f + bob
+                val r = 58.dp.toPx()
+                // Particles on two tilted elliptical orbits; depth decides size/brightness and front/back order.
+                data class P(val x: Float, val y: Float, val z: Float)
+                fun orbit(phase: Float, n: Int, rx: Float, ry: Float, tilt: Float): List<P> = List(n) { i ->
+                    val th = phase + i * (2f * Math.PI.toFloat() / n)
+                    val ex = rx * cos(th); val ey = ry * sin(th); val z = sin(th)
+                    val ct = cos(tilt); val st = sin(tilt)
+                    P(cx + ex * ct - ey * st, cy + ex * st + ey * ct, z)
                 }
-                Monogram(name.ifEmpty { "?" }, 104.dp)
-                if (online) Box(
-                    Modifier.align(Alignment.BottomEnd).offset((-30).dp, (-30).dp).size(22.dp).clip(CircleShape).background(V.c.bg).padding(3.dp)
-                        .clip(CircleShape).background(V_SUCCESS).graphicsLayer { alpha = 0.6f + 0.4f * breathe },
+                val ps = orbit(a, 7, r * 1.75f, r * 0.42f, -0.32f) + orbit(-b, 5, r * 1.5f, r * 0.36f, 0.42f)
+                fun dot(p: P) {
+                    val d = (p.z + 1f) / 2f
+                    val pr = (2.2f + 3.2f * d).dp.toPx()
+                    drawCircle(Brush.radialGradient(listOf(goldLight.copy(alpha = 0.55f * (0.35f + 0.65f * d)), Color.Transparent), Offset(p.x, p.y), pr * 3.2f), pr * 3.2f, Offset(p.x, p.y))
+                    drawCircle(Color.White.copy(alpha = 0.55f + 0.45f * d), pr * 0.55f, Offset(p.x, p.y))
+                }
+                // floor shadow
+                val sw = r * (1.35f - 0.08f * float)
+                val floorY = size.height * 0.45f + r * 1.38f
+                drawOval(
+                    Brush.radialGradient(listOf(Color.Black.copy(alpha = 0.42f - 0.08f * float), Color.Transparent), Offset(cx, floorY), sw),
+                    topLeft = Offset(cx - sw, floorY - sw * 0.14f), size = androidx.compose.ui.geometry.Size(sw * 2, sw * 0.28f),
                 )
+                // back particles + faint orbit paths
+                ps.filter { it.z < 0 }.forEach(::dot)
+                // outer glow
+                drawCircle(Brush.radialGradient(listOf(gold.copy(alpha = 0.45f * glow), gold.copy(alpha = 0.12f * glow), Color.Transparent), Offset(cx, cy), r * 2.0f), r * 2.0f, Offset(cx, cy))
+                // sphere body: light from top-left
+                drawCircle(
+                    Brush.radialGradient(listOf(goldLight, gold, goldDeep), Offset(cx - r * 0.38f, cy - r * 0.42f), r * 1.55f),
+                    r, Offset(cx, cy),
+                )
+                // rim light (bottom-right)
+                drawCircle(
+                    Brush.radialGradient(listOf(Color.Transparent, Color.Transparent, goldLight.copy(alpha = 0.55f)), Offset(cx - r * 0.25f, cy - r * 0.25f), r * 1.3f),
+                    r, Offset(cx, cy),
+                )
+                // letter, embossed: highlight then body
+                val tl = Offset(cx - letterLayout.size.width / 2f, cy - letterLayout.size.height / 2f)
+                drawText(letterLayout, color = Color.White.copy(alpha = 0.35f), topLeft = tl + Offset(-1.dp.toPx(), -1.5.dp.toPx()))
+                drawText(letterLayout, color = goldDeep, topLeft = tl)
+                // moving specular sheen + fixed highlight
+                drawOval(
+                    Brush.radialGradient(listOf(Color.White.copy(alpha = 0.85f), Color.White.copy(alpha = 0f)), Offset(cx - r * (0.42f - sheen * 0.25f), cy - r * 0.52f), r * 0.42f),
+                    topLeft = Offset(cx - r * (0.42f - sheen * 0.25f) - r * 0.36f, cy - r * 0.52f - r * 0.2f), size = androidx.compose.ui.geometry.Size(r * 0.72f, r * 0.4f),
+                )
+                // thin bright rim
+                drawCircle(goldLight.copy(alpha = 0.6f), r, Offset(cx, cy), style = Stroke(1.2.dp.toPx()))
+                // front particles
+                ps.filter { it.z >= 0 }.forEach(::dot)
             }
-            Spacer(Modifier.height(6.dp))
             Column(
-                Modifier.graphicsLayer { alpha = enter.value.coerceIn(0f, 1f); translationY = (1f - enter.value) * 24.dp.toPx() },
+                Modifier.graphicsLayer { alpha = enter.value.coerceIn(0f, 1f); translationY = (1f - enter.value) * 20.dp.toPx() },
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text(name, style = V.t.display.copy(fontSize = 32.sp, lineHeight = 36.sp), color = V.c.text)
+                Text(
+                    name, style = V.t.display.copy(fontSize = 34.sp, lineHeight = 40.sp), color = V.c.text,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 24.dp),
+                )
                 Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (isAdmin) Row(
-                        Modifier.clip(RoundedCornerShape(12.dp)).background(Brush.horizontalGradient(listOf(accent, second))).padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.clip(RoundedCornerShape(50))
+                            .then(
+                                if (isAdmin) Modifier.background(Brush.horizontalGradient(listOf(goldLight, gold, goldDeep)))
+                                else Modifier.background(gold.copy(alpha = 0.14f)).border(1.dp, gold.copy(alpha = 0.5f), RoundedCornerShape(50)),
+                            )
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
                     ) {
-                        Text("★", style = V.t.caption, color = Color.White)
-                        Spacer(Modifier.width(5.dp))
-                        Text("Administrator", style = V.t.caption, color = Color.White)
+                        Text(if (isAdmin) "Administrator" else "Member", style = V.t.label, color = if (isAdmin) goldDeep.copy(alpha = 0.95f) else gold)
                     }
-                    StatChip("Since $joinedLabel", accent)
-                    StatChip(if (online) "Online" else "Offline", if (online) V_SUCCESS else V.c.text3, pulse = online)
-                }
-                Spacer(Modifier.height(18.dp))
-                Row(
-                    Modifier.padding(horizontal = 16.dp).fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(V.c.s1.copy(alpha = 0.72f))
-                        .border(1.dp, V.c.hairline, RoundedCornerShape(22.dp)).padding(vertical = 14.dp),
-                ) {
-                    HeroStat(days, if (days == 1) "day here" else "days here", accent, Modifier.weight(1f))
-                    Box(Modifier.width(1.dp).height(38.dp).background(V.c.hairline).align(Alignment.CenterVertically))
-                    HeroStat(chats, if (chats == 1) "chat" else "chats", second, Modifier.weight(1f))
-                    Box(Modifier.width(1.dp).height(38.dp).background(V.c.hairline).align(Alignment.CenterVertically))
-                    HeroStat(devices, if (devices == 1) "device" else "devices", V_SUCCESS, Modifier.weight(1f))
+                    Spacer(Modifier.width(10.dp))
+                    Text("since $joinedLabel", style = V.t.label, color = V.c.text2)
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun HeroStat(value: Int, label: String, tint: Color, modifier: Modifier = Modifier) {
-    val shown by androidx.compose.animation.core.animateIntAsState(value, tween(1100, easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "count")
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(shown.toString(), style = V.t.title.copy(fontSize = 24.sp), color = tint)
-        Text(label, style = V.t.caption, color = V.c.text2)
     }
 }

@@ -314,11 +314,11 @@ fun PeopleScreen(onProfile: (String) -> Unit, vm: PeopleViewModel = hiltViewMode
     LaunchedEffect(Unit) { vm.search(vm.query.value) }
     val accent = V.c.text
     val warm = V.c.hall
-    val cool = V.c.direct
+    val cool = V.c.hall // People stays in the Hall gold family
     val list = res
     val onlineNow = list.orEmpty().filter { it.id in online && it.id != vm.me }
     Box(Modifier.fillMaxSize().background(V.c.bg)) {
-        com.rajdeep.vesper.ui.components.Aurora(warm, cool, intensity = 0.9f)
+        com.rajdeep.vesper.ui.components.Aurora(warm, androidx.compose.ui.graphics.lerp(warm, androidx.compose.ui.graphics.Color.White, 0.45f), intensity = 1.1f)
         LazyColumn(Modifier.fillMaxSize().statusBarsPadding().springOverscroll(), overscrollEffect = null, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)) {
             item(key = "head") {
                 Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp)) {
@@ -568,17 +568,11 @@ fun YouScreen(onConsole: (() -> Unit)? = null, vm: YouViewModel = hiltViewModel(
     var sheet by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(msg) { if (msg != null) { delay(3500); vm.message.value = null } }
     Box(Modifier.fillMaxSize().background(V.c.bg)) {
-        Column(Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState())) {
-            val chats by vm.chats.collectAsState()
-            val online by vm.online.collectAsState()
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             com.rajdeep.vesper.ui.components.ProfileHero(
                 name = me?.username ?: "",
                 isAdmin = me?.isAdmin == true,
                 joinedLabel = joined(me?.joinedAt ?: 0),
-                days = (((System.currentTimeMillis() - (me?.joinedAt ?: System.currentTimeMillis())) / 86_400_000L) + 1).toInt().coerceAtLeast(1),
-                chats = chats,
-                devices = devices.size.coerceAtLeast(1),
-                online = online,
             )
             SectionLabel("Appearance")
             Group {
