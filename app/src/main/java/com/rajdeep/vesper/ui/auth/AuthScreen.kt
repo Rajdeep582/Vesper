@@ -184,7 +184,7 @@ private fun AuthContent(endReason: String?, vm: AuthViewModel) {
                 .statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
         ) {
             Spacer(Modifier.height(48.dp))
-            DuskGlyph(72.dp)
+            com.rajdeep.vesper.ui.components.HallMascot(76.dp, color = V.c.hall)
             Spacer(Modifier.height(18.dp))
             Text("Vesper", style = V.t.display, color = V.c.text)
             Text("A quiet place to talk. Nothing stays forever.", style = V.t.body, color = V.c.text2, modifier = Modifier.padding(top = 6.dp))

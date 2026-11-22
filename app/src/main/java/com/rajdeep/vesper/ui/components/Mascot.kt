@@ -40,8 +40,8 @@ private fun Modifier.androidx_tap(onTap: () -> Unit) = pointerInput(Unit) { dete
  * Pupils spring toward random targets; antenna tips sway; the whole head breathes slightly.
  */
 @Composable
-fun HallMascot(size: Dp = 30.dp, modifier: Modifier = Modifier) {
-    val body = V.accent
+fun HallMascot(size: Dp = 30.dp, modifier: Modifier = Modifier, color: Color? = null) {
+    val body = color ?: V.accent
     val dark = lerp(body, Color.Black, 0.55f)
     val eyeWhite = V.c.bg
     val lookX = remember { Animatable(0f) }
