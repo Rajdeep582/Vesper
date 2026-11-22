@@ -86,7 +86,8 @@ fun main() {
 
 class Services(val cfg: Config, val db: Db) {
     val startedAt = System.currentTimeMillis()
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // Background work logs its failures instead of surfacing them as uncaught exceptions.
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> org.slf4j.LoggerFactory.getLogger("bg").warn("background task failed: {}", e.message) })
     val hub = Hub()
     val tokens = Tokens(cfg.jwtSecret)
     val atRest = AtRest(cfg.hallKeyset)
@@ -114,10 +115,14 @@ fun Application.vesper(cfg: Config, db: Db, startJobs: Boolean = true): Services
     }
     s.hub.onPresence = { uid, online ->
         s.scope.launch {
+            // A quick reconnect (network blip, app switch) shouldn't flash everyone's green dot off and on:
+            // announce "offline" only if the member is still gone after a short grace period.
+            if (!online) { kotlinx.coroutines.delay(Hub.OFFLINE_GRACE_MS); if (s.hub.isOnline(uid)) return@launch }
             val now = ServerClock.now()
-            db.users.updateOne(Document("_id", uid), Updates.set("la", now.asDate()))
+            // Tell everyone first; the last-seen write is best effort (never lets a DB hiccup escape the scope).
             s.hub.toAdmins(AdminPresence(uid, online, now))
             s.hub.toAll(com.rajdeep.vesper.shared.Presence(uid, online, now))
+            runCatching { db.users.updateOne(Document("_id", uid), Updates.set("la", now.asDate())) }
         }
     }
     if (startJobs) s.sweeper.start(s.scope)

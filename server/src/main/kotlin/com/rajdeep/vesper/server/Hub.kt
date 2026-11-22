@@ -32,6 +32,7 @@ class Conn(val uid: String, val did: Int, val isAdmin: Boolean, val ws: WebSocke
 
 /** Registry of live sockets. Presence = has at least one socket. */
 class Hub {
+    companion object { const val OFFLINE_GRACE_MS = 4_000L }
     private val byUser = ConcurrentHashMap<String, MutableSet<Conn>>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     var onPresence: (uid: String, online: Boolean) -> Unit = { _, _ -> }

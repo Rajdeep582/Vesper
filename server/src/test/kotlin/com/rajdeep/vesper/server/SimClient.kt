@@ -126,6 +126,18 @@ class SimClient(private val base: String) {
         error("no ack")
     }
 
+    /** Typing pulse: "typing" on, refreshed every 3 s for [seconds], then off. toUser null = the Hall. */
+    fun typing(toUsername: String?, seconds: Int) {
+        val to = toUsername?.let { userId(it) }
+        val end = System.currentTimeMillis() + seconds * 1000L
+        while (System.currentTimeMillis() < end) {
+            send(com.rajdeep.vesper.shared.Typing(to, true)); println("typing -> ${toUsername ?: "hall"}")
+            val until = minOf(end, System.currentTimeMillis() + 3_000)
+            while (System.currentTimeMillis() < until) inbox.poll(200, TimeUnit.MILLISECONDS)?.let { handle(it, false) }
+        }
+        send(com.rajdeep.vesper.shared.Typing(to, false)); println("typing off")
+    }
+
     fun hall(text: String) {
         val cmid = UUID.randomUUID().toString()
         send(HallSend(cmid, MessageKind.TEXT, MessageBody(text)))
@@ -209,6 +221,8 @@ fun main(args: Array<String>) {
         when (args[i]) {
             "hall" -> { sim.hall(args[i + 1]); i += 2 }
             "dm" -> { sim.dm(args[i + 1], args[i + 2]); i += 3 }
+            "type" -> { sim.typing(args[i + 1], args[i + 2].toInt()); i += 3 }
+            "typehall" -> { sim.typing(null, args[i + 1].toInt()); i += 2 }
             "listen" -> { val echo = args.getOrNull(i + 2) == "echo"; sim.listen(args[i + 1].toInt(), echo); i += if (echo) 3 else 2 }
             else -> error("unknown command ${args[i]}")
         }
