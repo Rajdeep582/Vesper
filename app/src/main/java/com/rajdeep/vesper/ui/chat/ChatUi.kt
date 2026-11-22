@@ -714,6 +714,8 @@ sealed interface RecordUi {
     data class Holding(val dragX: Float, val dragY: Float) : RecordUi
     data object Locked : RecordUi
     data object Paused : RecordUi
+    /** Discarded: the strip plays the "into the bin" animation, then returns to Idle. */
+    data object Cancelled : RecordUi
 }
 
 private val MENTION_QUERY = Regex("""(?:^|\s)@([A-Za-z0-9_.]{0,20})$""")
@@ -750,6 +752,7 @@ fun Composer(
         if (text.isNotBlank()) { typingNow(true); kotlinx.coroutines.delay(4_000); typingNow(false) } else typingNow(false)
     }
     var rec by remember { mutableStateOf<RecordUi>(RecordUi.Idle) }
+    LaunchedEffect(rec) { if (rec == RecordUi.Cancelled) { kotlinx.coroutines.delay(760); rec = RecordUi.Idle } }
     var isTouching by remember { mutableStateOf(false) }
     // WhatsApp-style hint after a too-short tap on the mic.
     var holdHint by remember { mutableStateOf(0) }
@@ -876,8 +879,12 @@ fun Composer(
                     else -> 0
                 },
                 transitionSpec = {
-                    (fadeIn(tween(Motion.S)) + scaleIn(Motion.spring(), initialScale = 0.95f)) togetherWith
-                        (fadeOut(tween(Motion.XS)) + scaleOut(tween(Motion.XS), targetScale = 0.95f))
+                    // Holding → Locked rises into place; Locked ↔ Paused cross-morph; back to idle sinks away.
+                    val up = targetState > initialState
+                    (fadeIn(tween(Motion.M)) + androidx.compose.animation.slideInVertically(androidx.compose.animation.core.spring(dampingRatio = 0.82f, stiffness = 340f)) { if (up) it / 3 else -it / 4 } +
+                        scaleIn(androidx.compose.animation.core.spring(dampingRatio = 0.75f, stiffness = 360f), initialScale = 0.96f)) togetherWith
+                        (fadeOut(tween(Motion.S)) + scaleOut(tween(Motion.S), targetScale = 0.97f)) using
+                        androidx.compose.animation.SizeTransform(clip = false) { _, _ -> androidx.compose.animation.core.spring(dampingRatio = 0.85f, stiffness = 380f) }
                 },
                 label = "composer_bar",
             ) { mode ->
@@ -889,7 +896,7 @@ fun Composer(
                             onDelete = {
                                 fb.error()
                                 currentOnRecordFinish(false)
-                                rec = RecordUi.Idle
+                                rec = RecordUi.Cancelled
                             },
                             onPause = {
                                 fb.tick()
@@ -931,7 +938,7 @@ fun Composer(
                                 player.stop()
                                 fb.error()
                                 currentOnRecordFinish(false)
-                                rec = RecordUi.Idle
+                                rec = RecordUi.Cancelled
                             },
                             onResume = {
                                 player.stop()
@@ -1006,6 +1013,7 @@ fun Composer(
                                         level = level,
                                         elapsedMs = elapsedMs,
                                         cancelPx = cancelPx,
+                                        cancelled = rec == RecordUi.Cancelled,
                                     )
                                 }
                             }
@@ -1175,7 +1183,7 @@ fun Composer(
                                                         // Slide left far enough = cancel, exactly like WhatsApp.
                                                         fb.error()
                                                         currentOnRecordFinish(false)
-                                                        rec = RecordUi.Idle
+                                                        rec = RecordUi.Cancelled
                                                         cancelledNow = true
                                                         break
                                                     }
@@ -1337,68 +1345,145 @@ fun Composer(
     }
 }
 
+/** Recording dot: soft pulse in size and glow (not a hard blink). */
+@Composable
+private fun RecDot() {
+    val t = androidx.compose.animation.core.rememberInfiniteTransition(label = "recdot")
+    val p by t.animateFloat(0f, 1f, androidx.compose.animation.core.infiniteRepeatable(tween(1100, easing = androidx.compose.animation.core.FastOutSlowInEasing), androidx.compose.animation.core.RepeatMode.Reverse), label = "p")
+    val red = V.c.error
+    Box(Modifier.size(14.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(14.dp).graphicsLayer { val k = 0.7f + 0.6f * p; scaleX = k; scaleY = k; alpha = 0.28f * (1f - p) }.clip(CircleShape).background(red))
+        Box(Modifier.size(9.dp).graphicsLayer { val k = 0.9f + 0.12f * p; scaleX = k; scaleY = k; alpha = 0.65f + 0.35f * p }.clip(CircleShape).background(red))
+    }
+}
+
+/** Timer whose digits roll up as they change (only the changed digit moves). */
+@Composable
+private fun RollingTimer(ms: Long, color: Color = V.c.text) {
+    val txt = duration(ms)
+    Row {
+        txt.forEachIndexed { i, ch ->
+            AnimatedContent(
+                ch,
+                transitionSpec = {
+                    (androidx.compose.animation.slideInVertically(androidx.compose.animation.core.spring(dampingRatio = 0.8f, stiffness = 520f)) { it / 2 } + fadeIn(tween(Motion.S))) togetherWith
+                        (androidx.compose.animation.slideOutVertically(tween(Motion.S)) { -it / 2 } + fadeOut(tween(Motion.XS)))
+                },
+                label = "digit$i",
+            ) { c -> Text(c.toString(), style = V.t.mono, color = color) }
+        }
+    }
+}
+
 @Composable
 private fun HoldingRecordingStrip(
     dragX: Float,
     level: Float,
     elapsedMs: Long,
     cancelPx: Float,
+    cancelled: Boolean = false,
 ) {
-    val pauseProgress = (-dragX / cancelPx).coerceIn(0f, 1f)
-    val pulse = androidx.compose.animation.core.rememberInfiniteTransition(label = "rec")
-    val dotAlpha by pulse.animateFloat(1f, 0.25f, androidx.compose.animation.core.infiniteRepeatable(tween(700), androidx.compose.animation.core.RepeatMode.Reverse), label = "dot")
-    val dot = V.c.error.copy(alpha = dotAlpha)
-    val history = remember { ArrayDeque<Int>() }
-    LaunchedEffect(level) {
-        history.addLast((level * 100).roundToInt())
-        while (history.size > 28) history.removeFirst()
-    }
+    val target = (-dragX / cancelPx).coerceIn(0f, 1f)
+    // Eased follow of the finger so text/tint glide instead of tracking every touch sample.
+    val pauseProgress by animateFloatAsState(target, androidx.compose.animation.core.spring(dampingRatio = 0.9f, stiffness = 900f), label = "slide")
+    val chevrons = androidx.compose.animation.core.rememberInfiniteTransition(label = "chev")
+    val wave by chevrons.animateFloat(0f, 1f, androidx.compose.animation.core.infiniteRepeatable(tween(1300, easing = androidx.compose.animation.core.LinearEasing)), label = "wave")
+    val enter = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(Unit) { enter.animateTo(1f, androidx.compose.animation.core.spring(dampingRatio = 0.78f, stiffness = 320f)) }
 
-    val textAlpha = (1f - pauseProgress * 1.5f).coerceIn(0f, 1f)
-    val releaseAlpha = ((pauseProgress - 0.75f) / 0.25f).coerceIn(0f, 1f)
-    val nudgeX = (dragX * 0.6f).coerceIn(-cancelPx, 0f)
+    val textAlpha = (1f - pauseProgress * 1.4f).coerceIn(0f, 1f)
+    val releaseAlpha = ((pauseProgress - 0.72f) / 0.28f).coerceIn(0f, 1f)
+    val nudgeX = (dragX * 0.55f).coerceIn(-cancelPx, 0f)
+    val danger = V.c.error
 
     Row(
         Modifier
             .fillMaxWidth()
             .heightIn(min = 50.dp)
+            .graphicsLayer { alpha = enter.value.coerceIn(0f, 1f); translationX = (1f - enter.value) * 24.dp.toPx() }
             .clip(RoundedCornerShape(25.dp))
-            .background(V.c.s2)
+            .background(lerp(V.c.s2, lerp(V.c.s2, danger, 0.22f), pauseProgress))
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(10.dp).clip(CircleShape).background(dot))
-        Spacer(Modifier.width(8.dp))
-        Text(duration(elapsedMs), style = V.t.mono, color = V.c.text)
-        Spacer(Modifier.width(10.dp))
-        LiveBars(level, V.accent.copy(alpha = 1f - pauseProgress * 0.5f), Modifier.weight(1f).height(26.dp))
-        Spacer(Modifier.width(8.dp))
-        Box(contentAlignment = Alignment.CenterEnd) {
-            if (textAlpha > 0f) {
-                Text(
-                    "‹  Slide to cancel",
-                    style = V.t.caption.copy(fontSize = 11.5.sp),
-                    color = V.c.text2,
-                    maxLines = 1,
-                    modifier = Modifier.graphicsLayer {
-                        translationX = nudgeX
-                        alpha = textAlpha
-                    },
-                )
-            }
-            if (releaseAlpha > 0f) {
-                Text(
-                    "Release… or keep sliding",
-                    style = V.t.caption.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold),
-                    color = V.accent,
-                    maxLines = 1,
-                    modifier = Modifier.graphicsLayer {
-                        alpha = releaseAlpha
-                    },
-                )
+        AnimatedContent(
+            cancelled,
+            transitionSpec = { (fadeIn(tween(Motion.S)) + scaleIn(Motion.bouncy(), initialScale = 0.6f)) togetherWith fadeOut(tween(Motion.XS)) },
+            label = "bin",
+        ) { gone ->
+            if (gone) BinDrop() else Row(verticalAlignment = Alignment.CenterVertically) {
+                RecDot()
+                Spacer(Modifier.width(6.dp))
+                RollingTimer(elapsedMs)
             }
         }
+        Spacer(Modifier.width(10.dp))
+        if (!cancelled) {
+            LiveBars(level, lerp(V.accent, danger, pauseProgress * 0.6f).copy(alpha = 1f - pauseProgress * 0.45f), Modifier.weight(1f).height(28.dp))
+            Spacer(Modifier.width(8.dp))
+            Box(contentAlignment = Alignment.CenterEnd) {
+                if (textAlpha > 0f) {
+                    Row(
+                        Modifier.graphicsLayer { translationX = nudgeX; alpha = textAlpha },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        // Three chevrons with a travelling shimmer pointing the way.
+                        for (k in 0 until 3) {
+                            val ph = ((wave + k / 3f) % 1f)
+                            Text("‹", style = V.t.caption.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold), color = V.c.text2.copy(alpha = 0.25f + 0.75f * (1f - ph)))
+                        }
+                        Spacer(Modifier.width(4.dp))
+                        Text("Slide to cancel", style = V.t.caption.copy(fontSize = 11.5.sp), color = V.c.text2, maxLines = 1)
+                    }
+                }
+                if (releaseAlpha > 0f) {
+                    Text(
+                        "Release to cancel",
+                        style = V.t.caption.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold),
+                        color = danger, maxLines = 1,
+                        modifier = Modifier.graphicsLayer { alpha = releaseAlpha; val k = 0.92f + 0.08f * releaseAlpha; scaleX = k; scaleY = k },
+                    )
+                }
+            }
+        } else {
+            Text("Discarded", style = V.t.caption.copy(fontSize = 12.sp), color = V.c.text2, modifier = Modifier.weight(1f))
+        }
     }
+}
+
+/** WhatsApp-style discard: the mic drops into a bin whose lid opens and snaps shut. */
+@Composable
+private fun BinDrop() {
+    val drop = remember { androidx.compose.animation.core.Animatable(0f) }
+    val lid = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.coroutineScope {
+            launch { lid.animateTo(1f, tween(160)); kotlinx.coroutines.delay(260); lid.animateTo(0f, androidx.compose.animation.core.spring(dampingRatio = 0.4f, stiffness = 700f)) }
+            launch { drop.animateTo(1f, tween(380, easing = androidx.compose.animation.core.FastOutLinearInEasing)) }
+        }
+    }
+    val red = V.c.error
+    Box(Modifier.size(30.dp, 30.dp), contentAlignment = Alignment.BottomCenter) {
+        Icon(
+            Icons.Rounded.Mic, null, tint = red,
+            modifier = Modifier.align(Alignment.TopCenter).size(15.dp).graphicsLayer {
+                translationY = (-22f + 26f * drop.value).dp.toPx(); rotationZ = 160f * drop.value
+                alpha = (1f - ((drop.value - 0.8f) / 0.2f).coerceIn(0f, 1f))
+            },
+        )
+        Icon(
+            Icons.Rounded.Delete, "Discarded", tint = red,
+            modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = -18f * lid.value; transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.1f, 0.2f) },
+        )
+    }
+}
+
+/** Staggered spring pop-in for bar controls (index = order). */
+@Composable
+private fun Modifier.popIn(index: Int): Modifier {
+    val a = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(Unit) { kotlinx.coroutines.delay(40L * index); a.animateTo(1f, androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 420f)) }
+    return this.graphicsLayer { val k = 0.4f + 0.6f * a.value; scaleX = k; scaleY = k; alpha = a.value.coerceIn(0f, 1f) }
 }
 
 @Composable
@@ -1409,9 +1494,6 @@ private fun LockedRecordingBar(
     onPause: () -> Unit,
     onSend: () -> Unit,
 ) {
-    val lp = androidx.compose.animation.core.rememberInfiniteTransition(label = "lrec")
-    val la by lp.animateFloat(1f, 0.25f, androidx.compose.animation.core.infiniteRepeatable(tween(700), androidx.compose.animation.core.RepeatMode.Reverse), label = "la")
-    val dot = V.c.error.copy(alpha = la)
 
     Row(
         Modifier
@@ -1427,6 +1509,7 @@ private fun LockedRecordingBar(
         Box(
             modifier = Modifier
                 .size(40.dp)
+                .popIn(1)
                 .clip(CircleShape)
                 .background(V.c.error.copy(alpha = 0.12f))
                 .pressable(onClick = onDelete),
@@ -1435,14 +1518,14 @@ private fun LockedRecordingBar(
             Icon(Icons.Rounded.Delete, contentDescription = "Discard recording", tint = V.c.error, modifier = Modifier.size(22.dp))
         }
 
-        Spacer(Modifier.width(10.dp))
-        Box(Modifier.size(10.dp).clip(CircleShape).background(dot))
         Spacer(Modifier.width(8.dp))
-        Text(duration(elapsedMs), style = V.t.mono, color = V.c.text)
+        RecDot()
+        Spacer(Modifier.width(6.dp))
+        RollingTimer(elapsedMs)
         Spacer(Modifier.width(10.dp))
 
         // Live Waveform
-        LiveBars(LocalLiveLevel.current, V.accent, Modifier.weight(1f).height(26.dp))
+        LiveBars(LocalLiveLevel.current, V.accent, Modifier.weight(1f).height(28.dp))
 
         Spacer(Modifier.width(10.dp))
 
@@ -1450,6 +1533,7 @@ private fun LockedRecordingBar(
         Box(
             modifier = Modifier
                 .size(40.dp)
+                .popIn(2)
                 .clip(CircleShape)
                 .background(V.c.s3)
                 .pressable(onClick = onPause),
@@ -1464,6 +1548,7 @@ private fun LockedRecordingBar(
         Box(
             modifier = Modifier
                 .size(46.dp)
+                .popIn(3)
                 .clip(CircleShape)
                 .background(Brush.linearGradient(listOf(V.accent, lerp(V.accent, Color.Black, 0.22f))))
                 .pressable(onClick = onSend),
@@ -1505,6 +1590,7 @@ private fun PausedRecordingBar(
         Box(
             modifier = Modifier
                 .size(40.dp)
+                .popIn(1)
                 .clip(CircleShape)
                 .background(V.c.error.copy(alpha = 0.12f))
                 .pressable(onClick = onDelete),
@@ -1519,6 +1605,7 @@ private fun PausedRecordingBar(
         Box(
             modifier = Modifier
                 .size(40.dp)
+                .popIn(2)
                 .clip(CircleShape)
                 .background(if (isPlayingPreview) V.accent else V.c.s3)
                 .pressable(onClick = onTogglePreview),
@@ -1557,6 +1644,7 @@ private fun PausedRecordingBar(
         Box(
             modifier = Modifier
                 .size(40.dp)
+                .popIn(3)
                 .clip(CircleShape)
                 .background(V.c.s3)
                 .pressable(onClick = onResume),
@@ -1571,6 +1659,7 @@ private fun PausedRecordingBar(
         Box(
             modifier = Modifier
                 .size(46.dp)
+                .popIn(4)
                 .clip(CircleShape)
                 .background(Brush.linearGradient(listOf(V.accent, lerp(V.accent, Color.Black, 0.22f))))
                 .pressable(onClick = onSend),
@@ -1600,34 +1689,63 @@ fun SelectDot(selected: Boolean, modifier: Modifier = Modifier) {
 
 internal val LocalLiveLevel = androidx.compose.runtime.compositionLocalOf { 0f }
 
-/** Scrolling level meter: samples the mic level every 60 ms and slides bars smoothly right-to-left. */
+/**
+ * Scrolling level meter driven by the frame clock: the mic level is low-pass filtered, bars glide right-to-left at a
+ * constant speed (no 60 ms steps) and each new bar grows into its height. The newest bars are brightest.
+ */
 @Composable
 fun LiveBars(level: Float, color: Color, modifier: Modifier = Modifier) {
     val latest by androidx.compose.runtime.rememberUpdatedState(level)
-    val bars = remember { androidx.compose.runtime.mutableStateListOf<Float>().apply { repeat(32) { add(0.08f) } } }
-    val shift = remember { androidx.compose.animation.core.Animatable(0f) }
+    val n = 40
+    val target = remember { FloatArray(n) { 0.06f } }
+    val shown = remember { FloatArray(n) { 0.06f } }
+    var phase by remember { mutableStateOf(0f) }
+    var tick by remember { mutableStateOf(0L) }
     LaunchedEffect(Unit) {
+        var smooth = 0.06f
+        var last = 0L
+        val stepMs = 75f
         while (true) {
-            shift.snapTo(0f)
-            shift.animateTo(1f, tween(60, easing = androidx.compose.animation.core.LinearEasing))
-            bars.removeAt(0); bars.add(latest.coerceIn(0.06f, 1f))
+            androidx.compose.runtime.withFrameNanos { now ->
+                val dt = if (last == 0L) 16f else ((now - last) / 1_000_000f).coerceIn(1f, 64f)
+                last = now
+                smooth += (latest.coerceIn(0f, 1f) - smooth) * (1f - kotlin.math.exp(-dt / 70f))
+                var ph = phase + dt / stepMs
+                while (ph >= 1f) {
+                    ph -= 1f
+                    System.arraycopy(target, 1, target, 0, n - 1); System.arraycopy(shown, 1, shown, 0, n - 1)
+                    // A touch of organic variation so steady tones don't look like a flat bar.
+                    target[n - 1] = (smooth * (0.82f + 0.36f * kotlin.random.Random.nextFloat())).coerceIn(0.06f, 1f)
+                    shown[n - 1] = 0.06f
+                }
+                phase = ph
+                val k = 1f - kotlin.math.exp(-dt / 55f)
+                for (i in 0 until n) shown[i] += (target[i] - shown[i]) * k
+                tick = now
+            }
         }
     }
     Canvas(modifier.clipToBounds()) {
-        // Fixed bar pitch; only as many of the newest bars as fit, right-aligned (never spills over neighbours).
-        val bw = 2.5.dp.toPx()
-        val step = bw + 2.5.dp.toPx()
-        val fit = (size.width / step).toInt().coerceIn(1, bars.size)
-        val start = bars.size - fit
+        tick // redraw every frame
+        val bw = 2.6.dp.toPx()
+        val step = bw + 2.4.dp.toPx()
+        val fit = (size.width / step).toInt().coerceIn(1, n - 1)
+        val start = n - fit
         val x0 = size.width - fit * step
-        bars.forEachIndexed { idx, v ->
-            if (idx < start) return@forEachIndexed
+        for (idx in start until n) {
             val i = idx - start
+            val x = x0 + i * step - phase * step + step * 0.5f
+            if (x < -bw) continue
+            val v = shown[idx]
             val h = (size.height * (0.12f + 0.88f * v)).coerceAtLeast(3f)
-            val x = x0 + i * step - shift.value * step + step
-            if (x < -bw) return@forEachIndexed
-            val edge = (x / (size.width * 0.18f)).coerceIn(0f, 1f) // fade bars entering from the left edge
-            drawRoundRect(color.copy(alpha = color.alpha * (0.35f + 0.65f * edge)), androidx.compose.ui.geometry.Offset(x, (size.height - h) / 2), androidx.compose.ui.geometry.Size(bw, h), androidx.compose.ui.geometry.CornerRadius(bw / 2))
+            val edge = (x / (size.width * 0.22f)).coerceIn(0f, 1f)
+            val recency = 0.55f + 0.45f * (i.toFloat() / fit)
+            drawRoundRect(
+                color.copy(alpha = color.alpha * edge * recency),
+                androidx.compose.ui.geometry.Offset(x, (size.height - h) / 2),
+                androidx.compose.ui.geometry.Size(bw, h),
+                androidx.compose.ui.geometry.CornerRadius(bw / 2),
+            )
         }
     }
 }
