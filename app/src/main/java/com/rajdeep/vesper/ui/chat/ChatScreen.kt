@@ -1015,18 +1015,7 @@ private fun ChatHeader(
                     OnlinePill(online)
                     Spacer(Modifier.width(6.dp))
                 }
-                // WhatsApp group style: "name is typing…" slides in under the title.
-                com.rajdeep.vesper.ui.components.Reveal(
-                    typers.isNotEmpty(),
-                    enter = androidx.compose.animation.expandVertically(Motion.spring()) + fadeIn(Motion.tw(Motion.M)),
-                    exit = androidx.compose.animation.shrinkVertically(Motion.tw(Motion.M)) + fadeOut(Motion.tw(Motion.S)),
-                ) {
-                    com.rajdeep.vesper.ui.components.LiveStatusLine(
-                        typing = com.rajdeep.vesper.ui.components.typingLabel(typers) ?: "",
-                        resting = {}, style = V.t.caption, accent = V.accent,
-                        modifier = Modifier.padding(start = 44.dp, top = 0.dp),
-                    )
-                }
+                // Hall typing is shown only in the chat (avatar + "name is typing" + bubble), not under the title.
             }
         }
     }
