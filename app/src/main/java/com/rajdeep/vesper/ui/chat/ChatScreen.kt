@@ -457,6 +457,9 @@ fun ChatScreen(
     var pendingRecord by remember { mutableStateOf(false) }
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { pendingRecord = false }
 
+    var composerHeightPx by remember { mutableIntStateOf(0) }
+    val attachKb = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val attachFocus = androidx.compose.ui.platform.LocalFocusManager.current
     Box(Modifier.fillMaxSize().background(V.c.bg)) {
         com.rajdeep.vesper.ui.components.ChatBackdrop()
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -529,7 +532,6 @@ fun ChatScreen(
             val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
             val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
             val density = LocalDensity.current
-            var composerHeightPx by remember { mutableIntStateOf(0) }
             val composerHeight = if (composerHeightPx > 0) with(density) { composerHeightPx.toDp() } else if (replyTo != null) 124.dp else 68.dp
             val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
@@ -690,7 +692,7 @@ fun ChatScreen(
                                         else -> vm.sendText(trimmed)
                                     }
                                 },
-                                onAttach = { attachOpen = true },
+                                onAttach = { attachFocus.clearFocus(); attachKb?.hide(); fb.tick(); attachOpen = !attachOpen },
                                 onTyping = { vm.typing(it) },
                                 draftKey = vm.peer ?: "hall",
                                 onRecordStart = {
@@ -711,6 +713,50 @@ fun ChatScreen(
             }
         }
 
+        // Attach panel: one continuous motion (scrim fades, card grows out of the paperclip, tiles pop in a wave).
+        androidx.activity.compose.BackHandler(enabled = attachOpen) { attachOpen = false }
+        val scrimA by androidx.compose.animation.core.animateFloatAsState(if (attachOpen) 0.45f else 0f, tween(Motion.M), label = "scrim")
+        if (scrimA > 0.01f) Box(
+            Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black.copy(alpha = scrimA))
+                .pointerInput(Unit) { detectTapGestures { attachOpen = false } },
+        )
+        val composerDp = with(LocalDensity.current) { composerHeightPx.toDp() }
+        Reveal(
+            attachOpen,
+            modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding().padding(start = 12.dp, end = 12.dp, bottom = composerDp + 6.dp),
+            enter = fadeIn(tween(Motion.S)) + scaleIn(androidx.compose.animation.core.spring(dampingRatio = 0.78f, stiffness = 520f), initialScale = 0.6f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.08f, 1f)),
+            exit = fadeOut(tween(Motion.XS)) + scaleOut(tween(Motion.S), targetScale = 0.7f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.08f, 1f)),
+        ) {
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(26.dp)).background(V.c.s2)
+                    .border(1.dp, V.c.hairline, RoundedCornerShape(26.dp)).padding(top = 18.dp, bottom = 14.dp),
+            ) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceEvenly) {
+                    AttachTile(Icons.Rounded.Description, "Document", androidx.compose.ui.graphics.Color(0xFF7F66FF), 0) {
+                        attachOpen = false; pickFile.launch(arrayOf("*/*"))
+                    }
+                    AttachTile(Icons.Rounded.PhotoLibrary, "Gallery", androidx.compose.ui.graphics.Color(0xFFC861F9), 1) {
+                        attachOpen = false; pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    }
+                    AttachTile(Icons.Rounded.PhotoCamera, "Camera", androidx.compose.ui.graphics.Color(0xFFFF2E74), 2) {
+                        attachOpen = false
+                        val dir = File(ctx.cacheDir, "capture").apply { mkdirs() }
+                        val f = File(dir, UUID.randomUUID().toString() + ".jpg")
+                        captureFile = f
+                        takePhoto.launch(FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f))
+                    }
+                    AttachTile(Icons.Rounded.Movie, "Video", androidx.compose.ui.graphics.Color(0xFF02A698), 3) {
+                        attachOpen = false; pickFile.launch(arrayOf("video/*"))
+                    }
+                }
+                Text(
+                    if (vm.isAdmin) "Compressed & end-to-end encrypted · no size limit for you" else "Compressed & end-to-end encrypted · files up to 10 MB",
+                    style = V.t.caption, color = V.c.text3, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp, start = 16.dp, end = 16.dp),
+                )
+            }
+        }
+
         // Full-screen viewer
         Reveal(viewer != null, enter = fadeIn(Motion.tw(Motion.M)) + scaleIn(Motion.spring(), initialScale = 0.92f), exit = fadeOut(Motion.tw(Motion.S)) + scaleOut(targetScale = 0.94f)) {
             var lastViewed by remember { mutableStateOf<MediaRef?>(null) }
@@ -720,32 +766,6 @@ fun ChatScreen(
         err?.let { msg -> LaunchedEffect(msg) { kotlinx.coroutines.delay(2800); vm.error.value = null } }
         Reveal(err != null, modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 72.dp), enter = fadeIn() + scaleIn(initialScale = 0.9f), exit = fadeOut()) {
             Text(err ?: "", style = V.t.label, color = V.c.text, modifier = Modifier.clip(RoundedCornerShape(14.dp)).background(V.c.s3).padding(horizontal = 14.dp, vertical = 10.dp))
-        }
-    }
-
-    if (attachOpen) {
-        ModalBottomSheet(onDismissRequest = { attachOpen = false }, containerColor = V.c.s1, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-            SheetTitle("Share", if (vm.isAdmin) "Compressed and end-to-end encrypted on this phone before upload · no size limit for you" else "Compressed and end-to-end encrypted on this phone before upload · files up to 10 MB")
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceEvenly) {
-                AttachTile(Icons.Rounded.Description, "Document", androidx.compose.ui.graphics.Color(0xFF7F66FF)) {
-                    attachOpen = false; pickFile.launch(arrayOf("*/*"))
-                }
-                AttachTile(Icons.Rounded.PhotoLibrary, "Gallery", androidx.compose.ui.graphics.Color(0xFFC861F9)) {
-                    attachOpen = false; pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                }
-                AttachTile(Icons.Rounded.PhotoCamera, "Camera", androidx.compose.ui.graphics.Color(0xFFFF2E74)) {
-                    attachOpen = false
-                    val dir = File(ctx.cacheDir, "capture").apply { mkdirs() }
-                    val f = File(dir, UUID.randomUUID().toString() + ".jpg")
-                    captureFile = f
-                    takePhoto.launch(FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f))
-                }
-                AttachTile(Icons.Rounded.Movie, "Video", androidx.compose.ui.graphics.Color(0xFF02A698)) {
-                    attachOpen = false; pickFile.launch(arrayOf("video/*"))
-                }
-            }
-            Text("Photos and videos are shrunk like WhatsApp; documents are packed with XZ. Shared files disappear after 24 hours.", style = V.t.label, color = V.c.text3, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
-            Spacer(Modifier.height(24.dp))
         }
     }
 
@@ -1221,8 +1241,14 @@ private fun ChatSearchBar(q: String, onQ: (String) -> Unit, count: Int, idx: Int
 
 
 @Composable
-private fun AttachTile(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, color: androidx.compose.ui.graphics.Color, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clip(RoundedCornerShape(16.dp)).pressable(scaleTo = 0.9f, onClick = onClick).padding(6.dp)) {
+private fun AttachTile(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, color: androidx.compose.ui.graphics.Color, index: Int, onClick: () -> Unit) {
+    val pop = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(Unit) { kotlinx.coroutines.delay(40L * index); pop.animateTo(1f, androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 420f)) }
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.graphicsLayer { scaleX = 0.5f + 0.5f * pop.value; scaleY = scaleX; alpha = pop.value.coerceIn(0f, 1f); translationY = (1f - pop.value) * 18.dp.toPx() }
+            .clip(RoundedCornerShape(16.dp)).pressable(scaleTo = 0.9f, onClick = onClick).padding(6.dp),
+    ) {
         Box(
             Modifier.size(58.dp).clip(CircleShape).background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(color, color.copy(alpha = 0.7f)))),
             contentAlignment = Alignment.Center,
